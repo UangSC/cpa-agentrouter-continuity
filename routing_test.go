@@ -1,0 +1,301 @@
+package main
+
+import (
+	"encoding/json"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/UangSC/cpa-agentrouter-continuity/internal/sdk"
+)
+
+func TestMain(m *testing.M) {
+	root, e := os.MkdirTemp("", "ar-routing-tests-")
+	if e != nil {
+		panic(e)
+	}
+	routingPath = filepath.Join(root, "sessions.json")
+	code := m.Run()
+	_ = os.RemoveAll(root)
+	os.Exit(code)
+}
+func routeFixture(t *testing.T) {
+	old := routingPath
+	routingPath = filepath.Join(t.TempDir(), "sessions.json")
+	oldHost := hostCall
+	hostCall = func(_ string, _ any, out any) error {
+		if v, ok := out.(*sdk.HostAffinityLookupResponse); ok {
+			v.Status = "unbound"
+		}
+		return nil
+	}
+	t.Cleanup(func() {
+		routingPath = old
+		hostCall = oldHost
+		admissionRequests.Range(func(k, v any) bool { admissionRequests.Delete(k); return true })
+	})
+}
+func arCandidate(id, key string, priority int) sdk.SchedulerAuthCandidate {
+	return sdk.SchedulerAuthCandidate{ID: id, Provider: pluginID, Priority: priority, Attributes: map[string]string{"ar_key_hash": digest(key)}}
+}
+func otherCandidate() sdk.SchedulerAuthCandidate {
+	return sdk.SchedulerAuthCandidate{ID: "other", Provider: "codex", Priority: 0}
+}
+func routeRequest(requestID, session string, fresh bool, candidates ...sdk.SchedulerAuthCandidate) (sdk.SchedulerPickResponse, execution) {
+	body := []byte(`{"input":[{"role":"user","content":"hello"}]}`)
+	if !fresh {
+		body = []byte(`{"input":[{"role":"user","content":"hello"},{"role":"assistant","content":"history"},{"role":"user","content":"continue"}]}`)
+	}
+	headers := http.Header{}
+	if session != "" {
+		headers.Set("Session_id", session)
+	}
+	metadata := map[string]any{"caller_scope": "test-caller"}
+	response := beforeAdmission(sdk.RequestInterceptRequest{RequestID: requestID, Headers: headers, Body: body, Metadata: metadata})
+	headers.Set(admissionHeader, response.Headers.Get(admissionHeader))
+	picked := pickAdmission(sdk.SchedulerPickRequest{Model: "test-model", Providers: []string{pluginID, "codex"}, Options: sdk.SchedulerOptions{Headers: headers, Metadata: metadata}, Candidates: candidates})
+	return picked, execution{ExecutorRequest: sdk.ExecutorRequest{AuthID: picked.AuthID, AuthProvider: pluginID, Headers: headers, Metadata: metadata, OriginalRequest: body}}
+}
+func TestNewConversationAdmittedAndContinuationKeepsOrigin(t *testing.T) {
+	routeFixture(t)
+	ar := arCandidate("ar", "mock-secret", 10)
+	picked, q := routeRequest("r1", "s1", true, ar, otherCandidate())
+	if picked.AuthID != "ar" {
+		t.Fatal(picked)
+	}
+	release, e := acquireExecution(q, testCredential())
+	if e != nil {
+		t.Fatal(e)
+	}
+	release()
+	picked, _ = routeRequest("r2", "s1", false, ar, otherCandidate())
+	if picked.AuthID != "ar" {
+		t.Fatal("AR continuation denied", picked)
+	}
+}
+func TestExistingForeignAndUnidentifiedHistoryNeverEnterAR(t *testing.T) {
+	routeFixture(t)
+	ar := arCandidate("ar", "mock-secret", 10)
+	for _, s := range []string{"old1", "old2"} {
+		picked, _ := routeRequest(s, s, false, ar, otherCandidate())
+		if picked.AuthID != "other" {
+			t.Fatal(picked)
+		}
+	}
+	picked, _ := routeRequest("missing", "", true, ar, otherCandidate())
+	if picked.AuthID != "other" {
+		t.Fatal("missing session admitted")
+	}
+	picked, _ = routeRequest("alone", "old3", false, ar)
+	if !picked.Reject {
+		t.Fatal("AR-only old request should reject")
+	}
+	picked, _ = routeRequest("replay", "old1", true, ar, otherCandidate())
+	if picked.AuthID != "other" {
+		t.Fatal("dropping history changed origin")
+	}
+}
+func TestTwoActiveSessionsAndRelease(t *testing.T) {
+	routeFixture(t)
+	ar := arCandidate("ar", "mock-secret", 10)
+	releases := []func(){}
+	for _, s := range []string{"s1", "s2"} {
+		p, q := routeRequest(s, s, true, ar, otherCandidate())
+		if p.AuthID != "ar" {
+			t.Fatal(p)
+		}
+		release, e := acquireExecution(q, testCredential())
+		if e != nil {
+			t.Fatal(e)
+		}
+		releases = append(releases, release)
+	}
+	p, _ := routeRequest("r3", "s3", true, ar, otherCandidate())
+	if p.AuthID != "other" {
+		t.Fatal("third session exceeded cap", p)
+	}
+	releases[0]()
+	p, _ = routeRequest("r4", "s4", true, ar, otherCandidate())
+	if p.AuthID != "ar" {
+		t.Fatal("slot not released", p)
+	}
+	p, _ = routeRequest("r5", "s3", false, ar, otherCandidate())
+	if p.AuthID != "other" {
+		t.Fatal("fallback conversation entered AR")
+	}
+	releases[1]()
+}
+func TestSameSessionRequestsReleaseOnlyTheirOwnLeases(t *testing.T) {
+	routeFixture(t)
+	ar := arCandidate("ar", "mock-secret", 10)
+	_, q1 := routeRequest("r1", "s1", true, ar)
+	_, q2 := routeRequest("r2", "s1", false, ar)
+	r1, e := acquireExecution(q1, testCredential())
+	if e != nil {
+		t.Fatal(e)
+	}
+	r2, e := acquireExecution(q2, testCredential())
+	if e != nil {
+		t.Fatal(e)
+	}
+	p, _ := routeRequest("r3", "s2", true, ar)
+	if p.AuthID != "ar" {
+		t.Fatal("same session counted twice")
+	}
+	r1()
+	completeAdmission(sdk.RequestCompletion{RequestID: "r1"})
+	p, _ = routeRequest("r4", "s3", true, ar, otherCandidate())
+	if p.AuthID != "other" {
+		t.Fatal("in-flight same-session lease lost")
+	}
+	r2()
+	p, _ = routeRequest("r5", "s4", true, ar)
+	if p.AuthID != "ar" {
+		t.Fatal("last same-session lease not released")
+	}
+}
+func TestDuplicateCredentialsShareKeyCapacity(t *testing.T) {
+	routeFixture(t)
+	a := arCandidate("ar-a", "mock-secret", 10)
+	b := arCandidate("ar-b", "mock-secret", 10)
+	for _, s := range []string{"one", "two"} {
+		p, _ := routeRequest(s, s, true, a)
+		if p.AuthID != "ar-a" {
+			t.Fatal(p)
+		}
+	}
+	p, _ := routeRequest("third", "three", true, b, otherCandidate())
+	if p.AuthID != "other" {
+		t.Fatal("duplicate credential bypass")
+	}
+}
+func TestDifferentKeyHasSeparateCapacity(t *testing.T) {
+	routeFixture(t)
+	a := arCandidate("ar-a", "mock-secret", 10)
+	b := arCandidate("ar-b", "mock-second", 5)
+	routeRequest("1", "1", true, a)
+	routeRequest("2", "2", true, a)
+	p, _ := routeRequest("3", "3", true, a, b, otherCandidate())
+	if p.AuthID != "ar-b" {
+		t.Fatal(p)
+	}
+}
+func TestConcurrentAdmissionNeverOversubscribes(t *testing.T) {
+	routeFixture(t)
+	ar := arCandidate("ar", "mock-secret", 10)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	count := 0
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			id := time.Unix(int64(n), 0).String()
+			p, _ := routeRequest(id, id, true, ar, otherCandidate())
+			if p.AuthID == "ar" {
+				mu.Lock()
+				count++
+				mu.Unlock()
+			}
+		}(i)
+	}
+	wg.Wait()
+	if count != 2 {
+		t.Fatalf("admitted %d sessions", count)
+	}
+}
+func TestRestartClearsLeasesButRetainsForeignOrigin(t *testing.T) {
+	routeFixture(t)
+	a := arCandidate("ar", "mock-secret", 10)
+	routeRequest("old", "foreign", false, a, otherCandidate())
+	routeRequest("active", "ar-session", true, a)
+	e := withRoutingLedger(func(s *routingLedger) error { s.Process = "previous-process"; return nil })
+	if e != nil {
+		t.Fatal(e)
+	}
+	p, _ := routeRequest("again", "foreign", true, a, otherCandidate())
+	if p.AuthID != "other" {
+		t.Fatal("foreign origin lost")
+	}
+	var count int
+	_ = withRoutingLedger(func(s *routingLedger) error { count = len(s.Leases); return nil })
+	if count != 0 {
+		t.Fatal("stale lease retained")
+	}
+}
+func TestCorruptStateFailsClosedForAR(t *testing.T) {
+	routeFixture(t)
+	_ = os.WriteFile(routingPath, []byte("invalid"), 0600)
+	a := arCandidate("ar", "mock-secret", 10)
+	p, _ := routeRequest("x", "x", true, a, otherCandidate())
+	if p.AuthID != "other" {
+		t.Fatal(p)
+	}
+	p, _ = routeRequest("y", "y", true, a)
+	if !p.Reject {
+		t.Fatal(p)
+	}
+}
+func TestNonARPoolsDelegateWithoutChoosing(t *testing.T) {
+	routeFixture(t)
+	p, _ := routeRequest("other", "other", true, otherCandidate())
+	if p.Handled {
+		t.Fatal("changed unrelated routing")
+	}
+	// The same window must stay external even if its next call has no assistant history.
+	p, _ = routeRequest("later", "other", true, arCandidate("ar", "mock-secret", 10), otherCandidate())
+	if p.AuthID != "other" {
+		t.Fatal("external-only origin was not recorded", p)
+	}
+}
+func TestNativeAffinityOverridesARPriority(t *testing.T) {
+	routeFixture(t)
+	hostCall = func(method string, value any, out any) error {
+		switch method {
+		case "host.affinity.lookup":
+			*out.(*sdk.HostAffinityLookupResponse) = sdk.HostAffinityLookupResponse{Status: "bound", AuthIndex: "foreign-index"}
+		case "host.auth.get_runtime":
+			*out.(*sdk.HostAuthGetRuntimeResponse) = sdk.HostAuthGetRuntimeResponse{Auth: sdk.HostAuthFileEntry{ID: "other", Provider: "codex"}}
+		}
+		return nil
+	}
+	p, _ := routeRequest("r", "existing", true, arCandidate("ar", "mock-secret", 100), otherCandidate())
+	if p.AuthID != "other" {
+		t.Fatal(p)
+	}
+}
+func TestFreshDetectionIsConservative(t *testing.T) {
+	for _, raw := range []string{`{"input":[{"type":"reasoning"}]}`, `{"previous_response_id":"id","input":"hello"}`, `{"input":[{"role":"user","content":"x","tool_calls":[]}]}`, `{"input":[{"role":"tool","content":"output"}]}`, `{"input":[{"type":"compaction","encrypted_content":"opaque"}]}`} {
+		if freshConversation([]byte(raw), nil) {
+			t.Fatal(raw)
+		}
+	}
+}
+func TestOriginLedgerContainsNoConversationOrKey(t *testing.T) {
+	routeFixture(t)
+	routeRequest("r", "sensitive-session-id", true, arCandidate("ar", "mock-secret", 10))
+	raw, e := os.ReadFile(routingPath)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var s routingLedger
+	if json.Unmarshal(raw, &s) != nil {
+		t.Fatal("invalid ledger")
+	}
+	for _, forbidden := range []string{"mock-secret", "sensitive-session-id", "hello"} {
+		if contains := string(raw); len(contains) > 0 && stringsContains(contains, forbidden) {
+			t.Fatal("private material in state")
+		}
+	}
+}
+func stringsContains(a, b string) bool {
+	for i := 0; i+len(b) <= len(a); i++ {
+		if a[i:i+len(b)] == b {
+			return true
+		}
+	}
+	return false
+}

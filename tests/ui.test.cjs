@@ -1,0 +1,19 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const vm=require('node:vm');
+const fs=require('node:fs');
+const path=require('node:path');
+const code=fs.readFileSync(path.join(__dirname,'../web/app.js'),'utf8');
+function runtime(){const store=new Map();const ctx=vm.createContext({TextEncoder,TextDecoder,Uint8Array,atob,console,localStorage:{getItem:k=>store.get(k)??null,setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)},location:{host:'localhost:123'},navigator:{userAgent:'test-agent'}});vm.runInContext(code,ctx);return {ctx,store,run:s=>vm.runInContext(s,ctx)}}
+test('HTML output escapes credential labels and upstream strings',()=>{const {run}=runtime();assert.equal(run('esc(`<img src=x onerror="x"> & \'quote\'`)'),'&lt;img src=x onerror=&quot;x&quot;&gt; &amp; &#39;quote&#39;')});
+test('model editor preserves non-edited model metadata and maps aliases',()=>{const {run}=runtime();const value=JSON.parse(run('JSON.stringify(parseModels("public = upstream\\nsecond",[{ID:"public",ContextLength:100000,Thinking:{Levels:["high"]}}]))'));assert.equal(value[0].Name,'upstream');assert.equal(value[0].ContextLength,100000);assert.deepEqual(value[0].Thinking.Levels,['high']);assert.equal(value[1].Name,'second')});
+test('invalid model mapping is rejected',()=>{const {run}=runtime();assert.throws(()=>run('parseModels("one=two=three")'))});
+function encoded(version,scope,data){const mask=new TextEncoder().encode('cli-proxy-api-webui::secure-storage|'+scope);const bytes=new TextEncoder().encode(JSON.stringify(data));return 'enc::v'+version+'::'+Buffer.from(bytes.map((b,i)=>b^mask[i%mask.length])).toString('base64')}
+test('reuses panel plain and v1/v2 remembered login formats',()=>{const {run,store}=runtime();for(const value of [JSON.stringify({state:{managementKey:' mock-key '}}),encoded(1,'localhost:123|test-agent',{state:{managementKey:'mock-key'}}),encoded(2,'localhost:123',{state:{managementKey:'mock-key'}}),encoded(2,'v2|localhost:123',{state:{managementKey:'mock-key'}})]){store.set('cli-proxy-auth',value);assert.equal(run('savedKey()'),'mock-key')}});
+test('malformed saved keys never execute or authenticate',()=>{const {run,store}=runtime();for(const value of ['not json','enc::v2::!',JSON.stringify({state:{managementKey:42}})]){store.set('cli-proxy-auth',value);assert.equal(run('savedKey()'),'')}});
+test('plugin remembered key takes precedence without altering panel state',()=>{const {run,store}=runtime();const panel=JSON.stringify({state:{managementKey:'panel-mock'}});store.set('cli-proxy-auth',panel);store.set('cpa-agentrouter-continuity.connection.v1',JSON.stringify({key:'plugin-mock'}));assert.equal(run('savedKey()'),'plugin-mock');assert.equal(store.get('cli-proxy-auth'),panel)});
+test('no AR API key gets persisted by frontend code',()=>{assert.equal((code.match(/localStorage\.setItem/g)||[]).length,1);assert.match(code,/JSON\.stringify\(\{key\}\)/);assert.doesNotMatch(code,/localStorage\.setItem\([^\n]*(?:api_key|field-key)/)});
+
+test('model picker preselects existing input and preserves aliases',()=>{const {run}=runtime();const rows=JSON.parse(run('JSON.stringify(buildModelChoices(["upstream","second"],"alias = upstream\\nsecond"))'));assert.equal(rows.length,2);assert(rows.every(x=>x.selected));assert.equal(rows[0].line,'alias = upstream')});
+test('model picker retains existing models not returned and leaves new ones unchecked',()=>{const {run}=runtime();const rows=JSON.parse(run('JSON.stringify(buildModelChoices(["new","new"],"old"))'));assert.equal(rows.length,2);assert.equal(rows[0].id,'old');assert.equal(rows[0].available,false);assert.equal(rows[0].selected,true);assert.equal(rows[1].selected,false)});
+test('empty input never selects all models automatically',()=>{const {run}=runtime();const rows=JSON.parse(run('JSON.stringify(buildModelChoices(["a","b"],""))'));assert.equal(rows.length,2);assert(rows.every(x=>!x.selected))});
