@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1
+
+- Add Windows amd64 support for the session ledger's cross-process file lock.
+- Use a Windows process creation timestamp when clearing stale leases, avoiding PID-reuse collisions.
+- Publish matching Linux and Windows assets without changing routing or credential behavior.
+
 ## 0.4.0
 
 - Rename the project, Go module, plugin/provider ID, management routes, browser storage and build artifacts to `cpa-agentrouter-continuity`.

@@ -14,6 +14,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', required=True, type=Path)
     parser.add_argument('--output-dir', required=True, type=Path)
+    parser.add_argument('--platform', choices=('linux-amd64', 'windows-amd64'), default='linux-amd64')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     version = re.search(r'const version = "([^"]+)"', (root / 'plugin.go').read_text())[1]
@@ -33,7 +34,10 @@ def main():
             target = package / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
-        target = package / 'plugins/linux/amd64' / f'{name}-v{version}.so'
+        platform_dir, extension = args.platform.split('-', 1), 'so'
+        if args.platform == 'windows-amd64':
+            platform_dir, extension = ['windows', 'amd64'], 'dll'
+        target = package / 'plugins' / platform_dir[0] / platform_dir[1] / f'{name}-v{version}.{extension}'
         target.parent.mkdir(parents=True)
         shutil.copy2(args.binary.resolve(), target)
         subprocess.run(['python3', str(package / 'scripts/check_release.py'), str(package)], check=True)
@@ -42,7 +46,7 @@ def main():
             for file in sorted(package.rglob('*')) if file.is_file()
         )
         (package / 'SHA256SUMS.txt').write_text(manifest)
-        archive = output / f'{name}-v{version}-linux-amd64.zip'
+        archive = output / f'{name}-v{version}-{args.platform}.zip'
         with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as bundle:
             for file in sorted(package.rglob('*')):
                 if file.is_file():

@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
@@ -35,17 +33,6 @@ type routingLedger struct {
 var routingPath = filepath.Join("plugins", "cpa-agentrouter-continuity-sessions.json")
 var routingStoreMu sync.Mutex
 
-func processIdentity() string {
-	raw, e := os.ReadFile("/proc/self/stat")
-	if e == nil {
-		end := strings.LastIndex(string(raw), ")")
-		fields := strings.Fields(string(raw)[end+1:])
-		if len(fields) > 19 {
-			return strconv.Itoa(os.Getpid()) + ":" + fields[19]
-		}
-	}
-	return strconv.Itoa(os.Getpid())
-}
 func withRoutingLedger(fn func(*routingLedger) error) error {
 	routingStoreMu.Lock()
 	defer routingStoreMu.Unlock()

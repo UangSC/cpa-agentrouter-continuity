@@ -1,5 +1,5 @@
 GO ?= go
-VERSION := 0.4.0
+VERSION := 0.4.1
 OS := $(shell $(GO) env GOOS)
 ARCH := $(shell $(GO) env GOARCH)
 EXT := so
