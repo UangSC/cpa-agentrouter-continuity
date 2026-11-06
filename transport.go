@@ -85,41 +85,7 @@ func readAll(id string) ([]byte, error) {
 }
 
 func safeError(status int, raw []byte, secrets ...string) *rpcError {
-	if failure := pricingConfigError(status, raw, secrets...); failure != nil {
-		return failure
-	}
-	for _, secret := range secrets {
-		if secret != "" {
-			raw = bytes.ReplaceAll(raw, []byte(secret), []byte("[REDACTED]"))
-		}
-	}
-	// Only upstream error objects are exposed; never echo a request or credential.
-	if classify(status, raw) == "history" {
-		return &rpcError{"ar_new_session_required", "AgentRouter cannot verify encrypted reasoning from this conversation. Start a new session; history was preserved and this request was not retried.", 400}
-	}
-	var o map[string]json.RawMessage
-	_ = json.Unmarshal(raw, &o)
-	var e struct {
-		Message string
-		Code    string
-	}
-	if nested := o["response"]; len(nested) > 0 {
-		_ = json.Unmarshal(nested, &o)
-	}
-	_ = json.Unmarshal(o["error"], &e)
-	if e.Message == "" {
-		e.Message = "AgentRouter request failed"
-	}
-	if len(e.Message) > 1500 {
-		e.Message = e.Message[:1500]
-	}
-	if e.Code == "" {
-		e.Code = "ar_upstream_error"
-	}
-	if status < 400 {
-		status = 502
-	}
-	return &rpcError{e.Code, e.Message, status}
+	return safeErrorWithCause(status, raw, nil, secrets...)
 }
 
 func runJSON(ctx context.Context, q execution, c credential, body []byte) ([]byte, error) {
@@ -156,13 +122,10 @@ func runJSON(ctx context.Context, q execution, c credential, body []byte) ([]byt
 			}
 			return raw, nil
 		}
-		kind := classify(s.Status, raw)
-		if err != nil {
-			kind = transportKind(err)
-		}
+		kind := failureKind(s.Status, raw, err)
 		if !b.retry(ctx, kind, s.Headers) {
 			failures.Add(1)
-			e := safeError(s.Status, raw, c.APIKey)
+			e := safeErrorWithCause(s.Status, raw, err, c.APIKey)
 			reason = e.Code
 			return nil, e
 		}

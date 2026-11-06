@@ -100,6 +100,11 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 	defer close(done)
 	defer func() { _ = hostCall("host.stream.close", map[string]string{"stream_id": q.StreamID}, nil) }()
 	terminal := func(e *rpcError) {
+		if ctx.Err() != nil {
+			outcome = "canceled"
+			reason = "client_disconnected"
+			return
+		}
 		failures.Add(1)
 		reason = e.Code
 		v := map[string]any{"type": "response.failed", "response": map[string]any{"status": "failed", "error": map[string]any{"code": e.Code, "message": strings.ReplaceAll(e.Message, c.APIKey, "[REDACTED]"), "type": errorType(e.HTTPStatus), "http_status": e.HTTPStatus}}}
@@ -120,10 +125,10 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 				reason = "client_disconnected"
 				return
 			}
-			if b.retry(ctx, transportKind(e), nil) {
+			if b.retry(ctx, failureKind(s.Status, nil, e), nil) {
 				continue
 			}
-			terminal(safeError(502, nil))
+			terminal(safeErrorWithCause(502, nil, e, c.APIKey))
 			return
 		}
 		if s.Status < 200 || s.Status >= 300 {
@@ -132,22 +137,22 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 				terminal(failure)
 				return
 			}
-			kind := classify(s.Status, raw)
-			if err != nil {
-				kind = transportKind(err)
-			}
+			kind := failureKind(s.Status, raw, err)
 			if b.retry(ctx, kind, s.Headers) {
 				continue
 			}
-			terminal(safeError(s.Status, raw, c.APIKey))
+			terminal(safeErrorWithCause(s.Status, raw, err, c.APIKey))
 			return
 		}
 		if !strings.Contains(strings.ToLower(s.Headers.Get("Content-Type")), "text/event-stream") {
-			raw, _ := readAll(s.StreamID)
+			raw, readErr := readAll(s.StreamID)
 			if b.retry(ctx, classify(502, raw), s.Headers) {
 				continue
 			}
-			terminal(safeError(502, raw, c.APIKey))
+			if readErr == nil {
+				readErr = fmt.Errorf("unexpected upstream Content-Type: %s", s.Headers.Get("Content-Type"))
+			}
+			terminal(safeErrorWithCause(502, raw, readErr, c.APIKey))
 			return
 		}
 		committed := false
@@ -187,6 +192,11 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 					if e := pricingConfigError(0, d, c.APIKey); e != nil {
 						terminalFailure = e
 						attemptErr = e
+						break
+					}
+					if committed && classify(0, d) == "history" {
+						terminalFailure = safeError(400, d, c.APIKey)
+						attemptErr = terminalFailure
 						break
 					}
 					if !committed {
@@ -261,12 +271,12 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 			return
 		}
 		if len(failure) == 0 && attemptErr != nil {
-			kind = transportKind(attemptErr)
+			kind = failureKind(0, nil, attemptErr)
 		}
 		if b.retry(ctx, kind, s.Headers) {
 			continue
 		}
-		terminal(safeError(502, failure, c.APIKey))
+		terminal(safeErrorWithCause(502, failure, attemptErr, c.APIKey))
 		return
 	}
 }

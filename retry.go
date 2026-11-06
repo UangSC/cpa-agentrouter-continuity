@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"math/rand"
 	"net/http"
 	"strconv"
@@ -67,8 +66,9 @@ func classify(status int, raw []byte) string {
 	if x, ok := v["error"].(map[string]any); ok {
 		v = x
 	}
-	code := strings.ToLower(fmt.Sprint(v["code"]) + " " + fmt.Sprint(v["type"]))
-	msg := strings.ToLower(fmt.Sprint(v["message"]))
+	detail := upstreamErrorDetails(raw)
+	code := strings.ToLower(detail.Code + " " + detail.Type)
+	msg := strings.ToLower(detail.Message)
 	if status == 401 || status == 403 {
 		return ""
 	}
@@ -77,10 +77,7 @@ func classify(status int, raw []byte) string {
 			return ""
 		}
 	}
-	if strings.Contains(msg, "different azure openai resource") || (strings.Contains(msg, "encrypted content") && strings.Contains(msg, "item rs_") && (strings.Contains(msg, "could not be verified") || strings.Contains(msg, "could not be decrypted"))) {
-		return "history"
-	}
-	if strings.Contains(code, "invalid_encrypted_content") {
+	if historyValidationFailure(code, msg) {
 		return "history"
 	}
 	if status == 429 || strings.Contains(code, "rate_limit") || strings.Contains(msg, "exceeded token rate limit") {
@@ -99,6 +96,8 @@ func retryDelay(kind string, index int, h http.Header) time.Duration {
 	base := []int{1, 2, 4, 8, 15}
 	if kind == "rate" {
 		base = []int{10, 20, 40, 60, 60}
+	} else if kind == "history" {
+		base = []int{1, 3}
 	}
 	d := time.Duration(base[min(index, len(base)-1)])*time.Second + time.Duration(rand.Intn(250))*time.Millisecond
 	for _, k := range []string{"retry-after-ms", "x-ms-retry-after-ms"} {
@@ -117,9 +116,10 @@ func retryDelay(kind string, index int, h http.Header) time.Duration {
 }
 
 type budget struct {
-	used int
-	max  int
-	end  time.Time
+	used        int
+	historyUsed int
+	max         int
+	end         time.Time
 }
 
 func newBudget(c credential) budget {
@@ -149,15 +149,22 @@ func (b *budget) retry(ctx context.Context, kind string, h http.Header) bool {
 	if kind == "" || b.used >= b.max || ctx.Err() != nil {
 		return false
 	}
-	if kind == "history" || kind == pricingErrorKind {
+	if kind == pricingErrorKind || kind == "history" && b.historyUsed >= 2 {
 		return false
 	}
-	delay := retryDelay(kind, b.used, h)
+	index := b.used
+	if kind == "history" {
+		index = b.historyUsed
+	}
+	delay := retryDelay(kind, index, h)
 	if time.Now().Add(delay).After(b.end) {
 		return false
 	}
 	recordRetry(ctx, kind)
 	b.used++
+	if kind == "history" {
+		b.historyUsed++
+	}
 	retries.Add(1)
 	return waitRetry(ctx, delay) == nil
 }

@@ -112,6 +112,7 @@ func TestHistoryAlwaysPreserved(t *testing.T) {
 			}
 		}
 		b := newBudget(testCredential())
+		b.max = 0
 		if b.retry(context.Background(), "history", nil) {
 			t.Fatal("retried history")
 		}
@@ -230,15 +231,16 @@ func TestStreamRecoversBeforeContent(t *testing.T) {
 		t.Fatal(wire)
 	}
 }
-func TestDecryptFailureRequestsNewSessionWithoutReplay(t *testing.T) {
+func TestHistoryFailureRetriesOriginalRequestWithinLimit(t *testing.T) {
 	m := &mockHost{attempts: []attempt{{400, `{"error":{"message":"The encrypted content for item rs_1 could not be verified."}}`, nil}}}
+	m.attempts = append(m.attempts, m.attempts[0], m.attempts[0])
 	withMock(t, m)
 	runStreaming(context.Background(), execution{StreamID: "down"}, testCredential(), []byte(`{"input":[{"type":"reasoning","id":"rs_1","encrypted_content":"bad"}]}`))
-	if m.started != 1 || !bytes.Contains(m.bodies[0], []byte("rs_1")) {
+	if m.started != 3 || !bytes.Equal(m.bodies[0], m.bodies[1]) || !bytes.Equal(m.bodies[0], m.bodies[2]) || !bytes.Contains(m.bodies[0], []byte("rs_1")) {
 		t.Fatal("history changed or replayed")
 	}
-	if !bytes.Contains(bytes.Join(m.emitted, nil), []byte("ar_new_session_required")) {
-		t.Fatal("missing new session hint")
+	if !bytes.Contains(bytes.Join(m.emitted, nil), []byte(historyErrorCode)) {
+		t.Fatal("missing history verification hint")
 	}
 }
 

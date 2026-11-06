@@ -38,9 +38,9 @@ class Upstream(http.server.BaseHTTPRequestHandler):
         if scenario == 'limit' and attempt == 1:
             self.send_response(429); self.send_header('Content-Type','application/json');self.end_headers()
             self.wfile.write(b'{"error":{"code":"rate_limit_exceeded"}}'); return
-        if scenario == 'decrypt' and any(x.get('type') == 'reasoning' for x in data.get('input', [])):
+        if scenario in ('decrypt','history_http_recover','history_json_recover') and any(x.get('type') == 'reasoning' for x in data.get('input', [])) and (scenario=='decrypt' or attempt<=2):
             self.send_response(400);self.send_header('Content-Type','application/json');self.end_headers()
-            self.wfile.write(b'{"error":{"type":"invalid_request_error","message":"The encrypted content for item rs_old could not be verified. Reason: Encrypted content could not be decrypted or parsed."}}'); return
+            self.wfile.write(b'{"error":{"type":"invalid_request_error","code":"invalid_encrypted_content","message":"The encrypted content for item rs_old could not be verified. [trace_id=history-integration]"}}'); return
         if scenario == 'auth':
             self.send_response(401);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(b'{"error":{"code":"invalid_api_key"}}');return
         if scenario.startswith('pricing_http_'):
@@ -63,11 +63,17 @@ class Upstream(http.server.BaseHTTPRequestHandler):
         if terminal is not None and not data.get('stream'):
             self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers()
             self.wfile.write(json.dumps(terminal).encode());return
+        if scenario=='history_json_recover' and not data.get('stream'):
+            self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers()
+            self.wfile.write(json.dumps({'id':'resp_mock','object':'response','status':'completed','model':data['model'],'output':[]}).encode());return
         self.send_response(200);self.send_header('Content-Type','text/event-stream');self.end_headers()
         def event(value):
             raw=('data: '+json.dumps(value)+'\n\n').encode()
             self.wfile.write(raw);self.wfile.flush()
         event({'type':'response.created','response':{'id':'resp_mock','status':'in_progress'}})
+        if scenario in ('history_sse_recover','history_after_output') and (scenario=='history_after_output' or attempt<=2):
+            if scenario=='history_after_output':event({'type':'response.output_text.delta','delta':'Keep history output'})
+            event({'type':'response.failed','response':{'status':'failed','error':{'code':'invalid_encrypted_content','message':'The encrypted content for item rs_old could not be verified. [trace_id=history-integration]'}}});return
         if scenario in ('pricing_sse_before','pricing_sse_after','pricing_sse_error'):
             if scenario=='pricing_sse_after':event({'type':'response.output_text.delta','delta':'Keep this output'})
             detail={'code':'server_error','message':PRICING_DIAGNOSTIC}
@@ -136,7 +142,7 @@ if __name__ == '__main__':
     plugins=ROOT/'plugins/linux/amd64';plugins.mkdir(parents=True)
     first=args.previous_plugin or args.plugin
     current_plugin=plugins/f'cpa-agentrouter-continuity-v{expected_version}.so'
-    shutil.copy2(first,plugins/'cpa-agentrouter-continuity-v0.1.0.so' if args.previous_plugin else current_plugin)
+    shutil.copy2(first,plugins/pathlib.Path(first).name if args.previous_plugin else current_plugin)
     cert=ROOT/'mock-cert.pem'; key=ROOT/'mock-key.pem'
     subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-keyout',str(key),'-out',str(cert),'-days','1','-subj','/CN=agentrouter.org','-addext','subjectAltName=DNS:agentrouter.org'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     key.chmod(0o600)
@@ -165,7 +171,7 @@ if __name__ == '__main__':
                 {'type':'namespace','name':'collaboration','tools':[{'type':'function','name':'wait_agent',
                  'parameters':{'type':'object','properties':{'timeout_ms':{'type':'integer'}}}}]}]},
                 {'role':'user','content':'collaboration.wait_agent protocol test'}]
-        if scenario=='decrypt':body['input'].insert(0,{'type':'reasoning','id':'rs_old','encrypted_content':'bad'})
+        if scenario=='decrypt' or scenario.startswith('history_'):body['input'].insert(0,{'type':'reasoning','id':'rs_old','encrypted_content':'bad'})
         req=urllib.request.Request('http://127.0.0.1:'+str(listen)+'/v1/responses',data=json.dumps(body).encode(),headers={'Authorization':'Bearer mock-client','Content-Type':'application/json','Session_id':'test-session-'+scenario})
         return op.open(req,timeout=45).read().decode()
     try:
@@ -202,7 +208,7 @@ if __name__ == '__main__':
         (auth/'ar-mock.json').write_text(json.dumps(credential))
         time.sleep(1)
         DEFAULT_HEADERS_REQUIRED=True
-        for scenario,attempts,success in [('success',1,True),('limit',2,True),('decrypt',1,False),('disconnect',2,True),('after_output',1,False),('auth',1,False)]:
+        for scenario,attempts,success in [('success',1,True),('limit',2,True),('decrypt',3,False),('disconnect',2,True),('after_output',1,False),('auth',1,False)]:
             if scenario=='decrypt':
                 body={'model':'ar/ar-mock-model','input':'start this conversation','stream':True,'metadata':{'test_scenario':'decrypt-start'}}
                 req=urllib.request.Request('http://127.0.0.1:'+str(listen)+'/v1/responses',data=json.dumps(body).encode(),headers={'Authorization':'Bearer mock-client','Content-Type':'application/json','Session_id':'test-session-decrypt'})
@@ -212,7 +218,25 @@ if __name__ == '__main__':
             assert ('response.completed' in response)==success,(scenario,response)
             assert response.count('"delta": "OK"')<=1,(scenario,response)
             print('PASS',scenario,'attempts',attempts,'default_headers=True',flush=True)
-        history=[d for s,d in CAPTURE if s=='decrypt'];assert any(x.get('type')=='reasoning' for x in history[0]['input']);assert len(history)==1
+        history=[d for s,d in CAPTURE if s=='decrypt'];assert any(x.get('type')=='reasoning' for x in history[0]['input']);assert len(history)==3 and all(d==history[0] for d in history)
+        for scenario,stream in [('history_http_recover',True),('history_sse_recover',True),('history_json_recover',False),('history_after_output',True)]:
+            start={'model':'ar/ar-mock-model','input':'start this conversation','stream':True,'metadata':{'test_scenario':'start-'+scenario}}
+            req=urllib.request.Request('http://127.0.0.1:'+str(listen)+'/v1/responses',data=json.dumps(start).encode(),headers={'Authorization':'Bearer mock-client','Content-Type':'application/json','Session_id':'test-session-'+scenario})
+            assert b'response.completed' in op.open(req,timeout=20).read()
+            response=request(scenario,stream)
+            attempts=1 if scenario=='history_after_output' else 3
+            assert COUNTS.get(scenario)==attempts,(scenario,COUNTS,response)
+            sent=[d for name,d in CAPTURE if name==scenario]
+            assert len(sent)==attempts and all(d==sent[0] for d in sent)
+            if scenario=='history_after_output':
+                assert 'ar_history_verification_failed' in response and response.count('Keep history output')==1
+            else:
+                assert all(text not in response for text in ['response.failed','ar_history_verification_failed','history-integration']),response
+                assert 'response.completed' in response if stream else json.loads(response)['status']=='completed'
+                if stream:
+                    events=[json.loads(line[5:]) for line in response.splitlines() if line.startswith('data:') and line[5:].strip()!='[DONE]']
+                    assert not any(e.get('type')=='error' for e in events)
+            print('PASS',scenario,'one client request, internal attempts',attempts,'history preserved',flush=True)
         for scenario,stream in [('content_filter_before',True),('content_filter_after',True),('content_filter_json',False)]:
             try:response=request(scenario,stream)
             except urllib.error.HTTPError as error:
