@@ -90,5 +90,6 @@
         ]
       }
     }
-  ]
+  ],
+  "max_concurrent_sessions": 2
 }

@@ -1,6 +1,6 @@
 # AR Continuity
 
-当前版本：**0.4.6**。
+当前版本：**0.4.7**。
 
 AgentRouter 专用的 CPA 插件。提供 API Key 管理、请求日志、连接检测，以及 Responses HTTP/SSE 的有限故障恢复。只处理 `https://agentrouter.org/v1`，不拦截其他供应商，不替换 CPA 内置 Codex 执行器。
 
@@ -8,8 +8,8 @@ AgentRouter 专用的 CPA 插件。提供 API Key 管理、请求日志、连接
 
 - 只允许“从 AR 开始”的会话继续进入 AR。新会话仍按可用候选、既有亲和与优先级选择；不是所有新窗口都强制转入 AR。
 - 非 AR 会话不会因为 AR 恢复可用或优先级变高而被自动切入。带历史回复、工具结果、压缩引用但没有已知 AR 来源的请求，保守排除 AR。
-- 每个真实 AR API Key 最多 **2 个正在请求/重试/生成的不同会话**。同一会话同时发起多个请求按一个会话计数，最后一个请求完成才释放。闲置窗口不占用。
-- 相同 API Key 即使被重复配置为多个凭证，也共享两个名额。不同 Key 分别计数。
+- 每个 API Key 的并发会话上限默认 **2**，可在编辑弹窗中设为 **1–100**；统计正在请求、重试或生成的不同会话。同一会话同时发起多个请求按一个会话计数，最后一个请求完成才释放。闲置窗口不占用。
+- 相同 API Key 即使被重复配置为多个凭证，也共享活跃会话计数，不会获得独立名额池；各配置按自身上限判断新会话准入，建议同 Key 的重复配置使用相同上限。不同 Key 分别计数。
 - 满额或来源不合格时，从其他可用候选选择；如果客户端只指定了 AR 专属模型且没有其他候选，会明确报错，不偷偷超额或转入不支持该模型的供应商。
 - 会话先走其他供应商后不会回到 AR。AR 会话若后续转走其他供应商，也不再自动回到 AR，避免混入不兼容的加密历史。
 - 服务端无法观察“新建窗口”动作，以会话标识、首次请求和已记录来源判断。无法确认的新会话可能保守绕开 AR。不要复用会话 ID 表示两个不同窗口。
@@ -34,7 +34,7 @@ AgentRouter 专用的 CPA 插件。提供 API Key 管理、请求日志、连接
 
 ### API Key 管理
 
-支持新增、编辑、启用和停用。每个 Key 独立配置名称、模型与别名、可选前缀、请求头、重试次数和预算。编辑时 Key 留空表示保留；新增时必须输入 Key。
+支持新增、编辑、启用和停用。每个 Key 独立配置名称、模型与别名、可选前缀、并发会话上限、请求头、重试次数和预算。上限保存后用于后续准入，调低不会中断已在途请求；同一活跃会话的多个请求仍共用名额。编辑时 Key 留空表示保留；新增时必须输入 Key。
 
 模型输入框旁的「获取模型」会直接读取 AR `/v1/models`。编辑现有凭证且 Key 留空时使用已保存 Key；新增或填写新 Key 时使用表单中的值，不会提前保存。弹窗支持搜索、多选、全选/清空当前搜索结果；输入框已有模型默认勾选，别名保留。本次未返回的已有模型也保留为可选项，避免静默删除。确认只填入表单，保存配置后才生效；取消或获取失败不会改动原模型列表。
 
@@ -42,7 +42,7 @@ AgentRouter 专用的 CPA 插件。提供 API Key 管理、请求日志、连接
 
 ### 请求日志与健康
 
-每 5 秒刷新，展示进行中的请求及最近 200 条完成记录：模型、凭证名称、状态、尝试次数、首段延迟、总耗时、重试原因和错误码。不记录对话正文、工具参数或完整密钥。日志和健康检测结果保存在内存中，进程重启或插件换版后重新开始；不导入旧版本的请求历史。
+每 5 秒刷新，展示进行中的请求及最近 200 条完成记录：模型、凭证名称、状态、尝试次数、首段延迟、总耗时、重试原因和错误码，以及请求开始时的活跃会话数 / 配置上限。并发列为历史快照，不随之后的上限调整改变。不记录对话正文、工具参数或完整密钥。日志和健康检测结果保存在内存中，进程重启或插件换版后重新开始；不导入旧版本的请求历史。
 
 健康卡片结合最近请求显示状态。手动「检测连接」访问 AR 的模型列表接口，不发送生成请求；列表成功不能保证实际模型生成成功。检测沿用 CPA 全局代理。不会自动定时调用 AR。
 
@@ -66,13 +66,13 @@ Originator: codex_exec
 分发的 `.so` 适用于 **Linux amd64 / x86-64、glibc 2.28 或更新**；`.dll` 适用于 **Windows amd64 / x86-64**。本轮 Linux 隔离验证使用 CPA **8.0.34（插件 RPC schema 6）**。其他版本需要兼容同一插件 ABI、管理与流式回调接口；仅看版本号更大不能保证兼容。ARM、macOS 和 musl/Alpine 需要对应平台重新编译。
 
 1. 备份目标机配置。确认服务账号、工作目录、`plugins.dir` 和 `oauth.auth-dir`。
-2. 将 `cpa-agentrouter-continuity-v0.4.6.so` 放入 `<plugins.dir>/linux/amd64/`。目录与文件必须由 CPA 服务账号可读；权限通常为目录 755、插件 644。
+2. 将 `cpa-agentrouter-continuity-v0.4.7.so` 放入 `<plugins.dir>/linux/amd64/`。目录与文件必须由 CPA 服务账号可读；权限通常为目录 755、插件 644。
 3. 在 CPA 插件管理中启用 **cpa-agentrouter-continuity**，完成热加载。无需为了安装插件修改现有供应商配置。
 4. 打开插件页面，输入目标机 CPA 管理密钥，新增 AR API Key；或私下复制已有 AR 凭证到目标机认证目录。凭证应由服务账号拥有、权限 600。不要把认证目录打进公开安装包。
 5. 核对目标机代理和域名分流。插件使用宿主全局代理，**不会自动复制原机器的 mihomo 配置，也不会自动保证非 ISP 出口**。若需要普通节点出口，须在目标机为 `agentrouter.org` 单独设置规则。
 6. 用可选的临时模型前缀验证路由。确认正常后，自行决定是否保留前缀。没有前缀的模型可能参与同名模型的调度。
 
-Windows 使用同一套配置步骤，将 `cpa-agentrouter-continuity-v0.4.6.dll` 放入 `<plugins.dir>/windows/amd64/`。Windows 版本使用系统 `LockFileEx` 保护会话状态，并以进程创建时间区分 PID 重用。
+Windows 使用同一套配置步骤，将 `cpa-agentrouter-continuity-v0.4.7.dll` 放入 `<plugins.dir>/windows/amd64/`。Windows 版本使用系统 `LockFileEx` 保护会话状态，并以进程创建时间区分 PID 重用。
 
 旧的 AR API 提供商条目可以在插件凭证已完整配置并验证后删除。不要同时启用旧条目和新插件凭证，否则旧条目仍可绕过插件。插件凭证独立保存 Key、模型和请求头，删除旧条目不会删除插件凭证。
 
@@ -137,7 +137,7 @@ python3 scripts/check_release.py .
 隔离集成测试需要 Python 3、PyYAML、OpenSSL、curl 和 CPA 可执行文件。测试自建临时目录、mock 凭证与 TLS 上游，不读取生产配置或调用真实模型：
 
 ```sh
-python3 tests/integration.py --cpa-binary /path/to/cli-proxy-api --plugin /path/to/cpa-agentrouter-continuity-v0.4.6.so
+python3 tests/integration.py --cpa-binary /path/to/cli-proxy-api --plugin /path/to/cpa-agentrouter-continuity-v0.4.7.so
 ```
 
 该测试在 Linux 上实际加载共享库，核对源码版本，覆盖限流/断流恢复、内容过滤终止、桌面工具往返、凭证管理、会话来源、并发名额、配置热加载和取消。`--expected-version` 可指定其他待验版本；`--previous-plugin` 可追加旧库热升级验证。测试结果与平台边界见 [VALIDATION.md](VALIDATION.md)。
@@ -173,12 +173,12 @@ python3 tests/integration.py --cpa-binary /path/to/cli-proxy-api --plugin /path/
 ```sh
 make build
 python3 scripts/package_release.py \
-  --binary dist/linux/amd64/cpa-agentrouter-continuity-v0.4.6.so \
+  --binary dist/linux/amd64/cpa-agentrouter-continuity-v0.4.7.so \
   --output-dir dist/release
 
 python3 scripts/package_release.py \
   --platform windows-amd64 \
-  --binary dist/windows/amd64/cpa-agentrouter-continuity-v0.4.6.dll \
+  --binary dist/windows/amd64/cpa-agentrouter-continuity-v0.4.7.dll \
   --output-dir dist/release
 ```
 

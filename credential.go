@@ -6,21 +6,33 @@ import (
 	"github.com/UangSC/cpa-agentrouter-continuity/internal/sdk"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
 type credential struct {
-	Label              string            `json:"label,omitempty"`
-	Type               string            `json:"type"`
-	ID                 string            `json:"id"`
-	APIKey             string            `json:"api_key"`
-	BaseURL            string            `json:"base_url"`
-	Headers            map[string]string `json:"headers"`
-	Models             []sdk.ModelInfo   `json:"models"`
-	Prefix             string            `json:"model_prefix,omitempty"`
-	Disabled           bool              `json:"disabled,omitempty"`
-	MaxRetries         *int              `json:"max_retries,omitempty"`
-	RetryBudgetSeconds int               `json:"retry_budget_seconds,omitempty"`
+	Label                 string            `json:"label,omitempty"`
+	Type                  string            `json:"type"`
+	ID                    string            `json:"id"`
+	APIKey                string            `json:"api_key"`
+	BaseURL               string            `json:"base_url"`
+	Headers               map[string]string `json:"headers"`
+	Models                []sdk.ModelInfo   `json:"models"`
+	Prefix                string            `json:"model_prefix,omitempty"`
+	Disabled              bool              `json:"disabled,omitempty"`
+	MaxRetries            *int              `json:"max_retries,omitempty"`
+	RetryBudgetSeconds    int               `json:"retry_budget_seconds,omitempty"`
+	MaxConcurrentSessions *int              `json:"max_concurrent_sessions,omitempty"`
+}
+
+const defaultMaxConcurrentSessions = 2
+const maximumConcurrentSessions = 100
+
+func sessionLimit(c credential) int {
+	if c.MaxConcurrentSessions != nil {
+		return *c.MaxConcurrentSessions
+	}
+	return defaultMaxConcurrentSessions
 }
 
 const defaultUserAgent = "codex_exec/0.159.3 (Windows 10.0.19045; x86_64) dumb (codex_exec; 0.159.3)"
@@ -62,6 +74,9 @@ func validateCredential(c credential) error {
 	if c.RetryBudgetSeconds < 0 || c.RetryBudgetSeconds > 600 {
 		return fmt.Errorf("retry budget must be between 0 and 600 seconds")
 	}
+	if n := sessionLimit(c); n < 1 || n > maximumConcurrentSessions {
+		return fmt.Errorf("并发会话上限必须为 1–%d 的整数", maximumConcurrentSessions)
+	}
 	return nil
 }
 
@@ -76,7 +91,7 @@ func decodeCredential(raw []byte) (credential, error) {
 
 func authData(c credential, raw []byte, file string) sdk.AuthData {
 	return sdk.AuthData{Provider: pluginID, ID: c.ID, FileName: file, Label: credentialLabel(c), Disabled: c.Disabled, StorageJSON: raw,
-		Metadata: map[string]any{"type": pluginID, "request_retry": 0}, Attributes: map[string]string{"ar_base_url": c.BaseURL, "ar_key_hash": digest(c.APIKey)}}
+		Metadata: map[string]any{"type": pluginID, "request_retry": 0}, Attributes: map[string]string{"ar_base_url": c.BaseURL, "ar_key_hash": digest(c.APIKey), "ar_max_concurrent_sessions": strconv.Itoa(sessionLimit(c))}}
 }
 
 func modelForCredential(c credential, requested string) (string, error) {

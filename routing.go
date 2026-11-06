@@ -18,7 +18,6 @@ import (
 )
 
 const admissionHeader = "X-Cpa-Agentrouter-Continuity-Admission"
-const maxConcurrentSessions = 2
 
 type admissionRequest struct {
 	ID, Session, RawSession, PreferredAuth string
@@ -203,17 +202,30 @@ func affinityCandidate(q sdk.SchedulerPickRequest, r admissionRequest) (string, 
 	return runtime.Auth.ID, runtime.Auth.Provider
 }
 func keyForCandidate(c sdk.SchedulerAuthCandidate) string { return c.Attributes["ar_key_hash"] }
-func availableSession(s *routingLedger, key, session string) bool {
-	if key == "" || session == "" {
-		return false
+func limitForCandidate(c sdk.SchedulerAuthCandidate) int {
+	limit, err := strconv.Atoi(c.Attributes["ar_max_concurrent_sessions"])
+	if err != nil || limit < 1 || limit > maximumConcurrentSessions {
+		return defaultMaxConcurrentSessions
 	}
+	return limit
+}
+
+func keySessions(s *routingLedger, key string) map[string]bool {
 	sessions := map[string]bool{}
 	for _, lease := range s.Leases {
 		if lease.KeyHash == key {
 			sessions[lease.Session] = true
 		}
 	}
-	return sessions[session] || len(sessions) < maxConcurrentSessions
+	return sessions
+}
+
+func availableSession(s *routingLedger, key, session string, limit int) bool {
+	if key == "" || session == "" {
+		return false
+	}
+	sessions := keySessions(s, key)
+	return sessions[session] || len(sessions) < limit
 }
 func chooseWeighted(candidates []sdk.SchedulerAuthCandidate) sdk.SchedulerAuthCandidate {
 	sort.Slice(candidates, func(i, j int) bool { return candidates[i].ID < candidates[j].ID })
@@ -297,7 +309,7 @@ func pickAdmission(q sdk.SchedulerPickRequest) sdk.SchedulerPickResponse {
 		allowed := []sdk.SchedulerAuthCandidate{}
 		for _, candidate := range q.Candidates {
 			if candidate.Provider == pluginID {
-				if !eligible || !availableSession(s, keyForCandidate(candidate), r.Session) {
+				if !eligible || !availableSession(s, keyForCandidate(candidate), r.Session, limitForCandidate(candidate)) {
 					continue
 				}
 				if known && origin.KeyHash != "" && origin.KeyHash != keyForCandidate(candidate) {
@@ -376,7 +388,7 @@ func acquireExecution(q execution, c credential) (func(), error) {
 	}, nil
 }
 func routingSnapshot() map[string]any {
-	result := map[string]any{"limit": maxConcurrentSessions, "policy": "ar-origin-only", "active_sessions": map[string]int{}, "state": "ready"}
+	result := map[string]any{"limit": defaultMaxConcurrentSessions, "default_limit": defaultMaxConcurrentSessions, "policy": "ar-origin-only", "active_sessions": map[string]int{}, "state": "ready"}
 	e := withRoutingLedger(func(s *routingLedger) error {
 		perKey := map[string]map[string]bool{}
 		for _, lease := range s.Leases {

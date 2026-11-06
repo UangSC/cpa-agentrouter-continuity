@@ -313,6 +313,47 @@ if __name__ == '__main__':
         assert COUNTS.get('released')==1
         assert 'OTHER' in mixed('third-session','overflow-followup',history=True)
         print('PASS two-session cap, non-AR fallback, release, origin remains external',flush=True)
+        # Change limits through the public API while preserving the runtime key.
+        assert item['max_concurrent_sessions']==2
+        config_edit=dict(edit,model_prefix='',max_concurrent_sessions=3)
+        manage('/credentials',config_edit,'PUT')
+        assert json.loads((auth/'ar-mock.json').read_text())['max_concurrent_sessions']==3
+        time.sleep(1)
+        RELEASE.clear();outputs=[]
+        threads=[threading.Thread(target=lambda n=n:outputs.append(mixed('custom-'+str(n),'slot-custom-'+str(n)))) for n in range(3)]
+        for worker in threads:worker.start()
+        for _ in range(50):
+            if all(COUNTS.get('slot-custom-'+str(n))==1 for n in range(3)):break
+            time.sleep(.1)
+        else:raise AssertionError('configured limit three did not admit three sessions')
+        current=next(c for c in manage('/credentials')['credentials'] if c['auth_index']==item['auth_index'])
+        assert current['active_sessions']==3 and current['max_concurrent_sessions']==3
+        assert 'OTHER' in mixed('custom-overflow','custom-overflow') and not COUNTS.get('custom-overflow')
+        config_edit['max_concurrent_sessions']=1
+        manage('/credentials',config_edit,'PUT');time.sleep(1)
+        assert 'OTHER' in mixed('lowered-overflow','lowered-overflow') and not COUNTS.get('lowered-overflow')
+        assert all(worker.is_alive() for worker in threads),'lowering the limit canceled existing streams'
+        RELEASE.set()
+        for worker in threads:worker.join(10)
+        assert len(outputs)==3 and all('response.completed' in x for x in outputs)
+        rows=manage('/overview')['logs']['recent']
+        custom=[r for r in rows if r.get('max_concurrent_sessions')==3]
+        assert len(custom)==3 and all(1<=r['active_sessions']<=3 for r in custom)
+        config_edit.pop('max_concurrent_sessions')
+        manage('/credentials',config_edit,'PUT')
+        assert json.loads((auth/'ar-mock.json').read_text())['max_concurrent_sessions']==1
+        RELEASE.clear();STARTED.clear();single=[]
+        worker=threading.Thread(target=lambda:single.append(mixed('limit-one','slot-limit-one')));worker.start();assert STARTED.wait(5)
+        assert 'OTHER' in mixed('limit-one-overflow','limit-one-overflow') and not COUNTS.get('limit-one-overflow')
+        RELEASE.set();worker.join(10);assert single and 'response.completed' in single[0]
+        for invalid in [0,-1,101,1.5]:
+            try:manage('/credentials',dict(config_edit,max_concurrent_sessions=invalid),'PUT')
+            except urllib.error.HTTPError as error:assert error.code==400
+            else:raise AssertionError('invalid session limit accepted')
+        credential=json.loads((auth/'ar-mock.json').read_text())
+        credential['max_concurrent_sessions']=2
+        (auth/'ar-mock.json').write_text(json.dumps(credential));time.sleep(1)
+        print('PASS configured limits 1/3, shared counts, live reduction, legacy edits, validation, concurrency logs',flush=True)
         # State survives a configuration reload, without altering the other provider's routing.
         cfg['plugins']['configs']['cpa-agentrouter-continuity']['priority']=2;config.write_text(yaml.safe_dump(cfg));time.sleep(1)
         assert 'OTHER' in mixed('foreign-session','foreign-after-reload')
