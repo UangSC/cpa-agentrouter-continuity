@@ -9,10 +9,7 @@
 - 既有远端 8 个提交、120 个文件内容版本，以及 3 个历史 Release ZIP 的 137 个文件成员均已审计；未发现命中的密钥或不必要运行文件。详情见 [仓库审计](repository-audit.md)。
 - 本节是整理后分发库；下方早先 UI 安装的同版本库校验值属于历史构建。运行中实例未因本次目录整理而重新部署。
 
-| 整理后的 0.5.2 文件 | SHA-256 |
-| --- | --- |
-| `cpa-agentrouter-continuity-v0.5.2.dll` | `90c0094bdc65a632272ae921fac5458c42d96e9c61755014b1ea6b6c4d0a8891` |
-| `cpa-agentrouter-continuity-v0.5.2.so` | `daf085ac9c5ed05dceffdd8a75d9ed7e3064267cd39e5c2934936a5117cbc590` |
+正式发布库在最终提交和版本标签建立后重建；其 Go 构建元数据必须对应干净的源码提交。各平台最终 SHA-256 以 Release 附带校验文件为准，安装包内另有 `SOURCE_COMMIT.txt`。
 
 
 ## 0.5.2 日志、连接策略与渠道定价（2026-11-06）

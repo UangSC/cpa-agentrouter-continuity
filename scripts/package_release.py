@@ -18,6 +18,7 @@ def main():
     parser.add_argument('--binary', required=True, type=Path, help='与当前提交对应的插件二进制')
     parser.add_argument('--output-dir', required=True, type=Path, help='ZIP 与校验文件输出目录')
     parser.add_argument('--platform', choices=('linux-amd64', 'windows-amd64'), default='linux-amd64', help='目标平台')
+    parser.add_argument('--go', default='go', help='Go 工具路径，用于验证二进制的源码提交和目标平台')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     version = re.search(r'const version = "([^"]+)"', (root / 'cmd/ar-continuity/plugin.go').read_text(encoding='utf-8'))[1]
@@ -37,6 +38,13 @@ def main():
     raw = binary.read_bytes()
     if not raw.startswith(b'MZ' if extension == 'dll' else b'\x7fELF'):
         raise SystemExit('二进制格式与目标平台不匹配。')
+    metadata = subprocess.check_output([args.go, 'version', '-m', str(binary)], text=True)
+    settings = dict(re.findall(r'\bbuild\s+([^=\s]+)=(\S+)', metadata))
+    target_os, target_arch = args.platform.split('-')
+    if settings.get('vcs.revision') != commit or settings.get('vcs.modified') != 'false':
+        raise SystemExit('二进制不是从当前干净提交构建，请在提交源码后重新构建。')
+    if settings.get('GOOS') != target_os or settings.get('GOARCH') != target_arch or settings.get('-buildmode') != 'c-shared':
+        raise SystemExit('Go 构建元数据与目标共享库平台不匹配。')
     for asset in (root / 'web').iterdir():
         if asset.suffix in {'.html', '.js', '.css', '.png'} and asset.read_bytes() not in raw:
             raise SystemExit('二进制内嵌网页与当前提交不一致：' + asset.name)
