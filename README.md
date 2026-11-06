@@ -1,6 +1,6 @@
 # cpa-agentrouter-continuity
 
-当前版本：**0.4.1**。
+当前版本：**0.4.5**。
 
 AgentRouter 专用的 CPA 插件。提供 API Key 管理、请求日志、连接检测，以及 Responses HTTP/SSE 的有限故障恢复。只处理 `https://agentrouter.org/v1`，不拦截其他供应商，不替换 CPA 内置 Codex 执行器。
 
@@ -14,6 +14,7 @@ AgentRouter 专用的 CPA 插件。提供 API Key 管理、请求日志、连接
 - 会话先走其他供应商后不会回到 AR。AR 会话若后续转走其他供应商，也不再自动回到 AR，避免混入不兼容的加密历史。
 - 服务端无法观察“新建窗口”动作，以会话标识、首次请求和已记录来源判断。无法确认的新会话可能保守绕开 AR。不要复用会话 ID 表示两个不同窗口。
 - 首次升级时无法恢复全部历史来源；旧窗口如果没有可验证的 AR 来源，会保守绕开 AR，需要新建会话使用。
+- 桌面端首轮 `additional_tools` 初始化定义可正常准入。若宿主明确标记 `history_initialization=new` 且正文没有历史回复、工具结果或加密内容，可替换之前失败首轮留下的外部来源记录；`cold_resume` 不适用。
 
 调度插件仅在候选含 AR 时处理选择；没有 AR 候选时仍委托原调度。混合候选先保留可用的原会话亲和，再按最高可用优先级与权重选择；这部分由插件执行，因为当前宿主接口没有“移除部分候选后再交回原选择器”的接口。若部署了另一个调度插件，需要确认不会覆盖本插件；执行器还会二次验证名额，未获准不会请求 AR。
 
@@ -56,20 +57,22 @@ Originator: codex_exec
 
 请求头未填写或为空时自动使用上述默认值，可覆盖为其他 AR 接受的 Codex/Zcode 客户端标识。认证头始终从当前凭证的 `api_key` 构造，不能被自定义请求头替换。
 
+默认 User-Agent 是上游兼容标识，在 Linux 上同样使用，不用于判断宿主操作系统。AR 请求中的 `collaboration` 工具命名空间会转换为 `cpa_ar_collaboration`，返回时恢复；只转换协议工具标识，不改参数、结果正文或加密历史。客户端已占用相同别名时明确报错。
+
 **源码、示例与二进制不包含可用 API Key 或管理密钥。** 示例 `api_key` 为空。运行时凭证必须由使用者填写或从原机器私下迁移，禁止加入源码和分发包。
 
 ## 迁移到另一台机器
 
-分发的 `.so` 适用于 **Linux amd64 / x86-64、glibc 2.28 或更新**；`.dll` 适用于 **Windows amd64 / x86-64**。已验证 CPA **8.0.33（插件 RPC schema 6）**。其他版本需要兼容同一插件 ABI、管理与流式回调接口；仅看版本号更大不能保证兼容。ARM、macOS 和 musl/Alpine 需要对应平台重新编译。
+分发的 `.so` 适用于 **Linux amd64 / x86-64、glibc 2.28 或更新**；`.dll` 适用于 **Windows amd64 / x86-64**。本轮 Linux 隔离验证使用 CPA **8.0.34（插件 RPC schema 6）**。其他版本需要兼容同一插件 ABI、管理与流式回调接口；仅看版本号更大不能保证兼容。ARM、macOS 和 musl/Alpine 需要对应平台重新编译。
 
 1. 备份目标机配置。确认服务账号、工作目录、`plugins.dir` 和 `oauth.auth-dir`。
-2. 将 `cpa-agentrouter-continuity-v0.4.1.so` 放入 `<plugins.dir>/linux/amd64/`。目录与文件必须由 CPA 服务账号可读；权限通常为目录 755、插件 644。
+2. 将 `cpa-agentrouter-continuity-v0.4.5.so` 放入 `<plugins.dir>/linux/amd64/`。目录与文件必须由 CPA 服务账号可读；权限通常为目录 755、插件 644。
 3. 在 CPA 插件管理中启用 **cpa-agentrouter-continuity**，完成热加载。无需为了安装插件修改现有供应商配置。
 4. 打开插件页面，输入目标机 CPA 管理密钥，新增 AR API Key；或私下复制已有 AR 凭证到目标机认证目录。凭证应由服务账号拥有、权限 600。不要把认证目录打进公开安装包。
 5. 核对目标机代理和域名分流。插件使用宿主全局代理，**不会自动复制原机器的 mihomo 配置，也不会自动保证非 ISP 出口**。若需要普通节点出口，须在目标机为 `agentrouter.org` 单独设置规则。
 6. 用可选的临时模型前缀验证路由。确认正常后，自行决定是否保留前缀。没有前缀的模型可能参与同名模型的调度。
 
-Windows 使用同一套配置步骤，将 `cpa-agentrouter-continuity-v0.4.1.dll` 放入 `<plugins.dir>/windows/amd64/`。Windows 版本使用系统 `LockFileEx` 保护会话状态，并以进程创建时间区分 PID 重用。
+Windows 使用同一套配置步骤，将 `cpa-agentrouter-continuity-v0.4.5.dll` 放入 `<plugins.dir>/windows/amd64/`。Windows 版本使用系统 `LockFileEx` 保护会话状态，并以进程创建时间区分 PID 重用。
 
 旧的 AR API 提供商条目可以在插件凭证已完整配置并验证后删除。不要同时启用旧条目和新插件凭证，否则旧条目仍可绕过插件。插件凭证独立保存 Key、模型和请求头，删除旧条目不会删除插件凭证。
 
@@ -93,6 +96,7 @@ python3 scripts/create_credential.py --output /secure/runtime/cpa-agentrouter-co
 - 已交付内容、工具事件或未知可能带副作用的事件后，不再自动重放。
 - 加密 reasoning 验证失败、跨资源错误提示新建会话；不删除历史、不降级重试。
 - 认证失败、余额/配额耗尽、普通参数错误不重试。
+- `response.incomplete` 的原因为 `content_filter` 时，流式返回一次 `ar_content_filter` 终止错误（插件发出 `response.failed`，宿主可转换为 `error` 事件），非流式返回 HTTP 400；已输出文本保留，插件不重放请求。`max_output_tokens` 等其他未完成原因继续透传。该规则不能阻止客户端自行发送新请求，也不会解除上游内容过滤。
 - 插件凭证的 CPA 外层 `request_retry` 为 0，避免与插件自身的重试轮次叠加；其他凭证不受影响。
 - 首版完整验证范围是 HTTP/SSE。没有验证 WebSocket；压缩端点保守透传，未测试真实上游压缩任务。
 
@@ -111,6 +115,7 @@ management.go      鉴权管理接口、凭证与连接检测
 monitor.go         脱敏请求记录
 routing.go         会话准入、调度与名额预留
 routing_store.go   持久化来源和跨版本名额锁
+tool_alias.go      AR 工具命名空间转换与响应还原
 web/               登录、API Key、日志与健康页面
 internal/sdk/      宿主接口类型
 scripts/           凭证生成与发布扫描
@@ -127,13 +132,15 @@ make build
 python3 scripts/check_release.py .
 ```
 
-跨平台构建必须提供目标平台 C 编译器。已分发二进制使用 Go 1.27.3、Zig 0.13.0 构建；Linux 目标 glibc 2.28，Windows 目标 amd64 MinGW ABI。
+跨平台构建必须提供目标平台 C 编译器。Linux amd64 分发目标为 glibc 2.28，Windows 为 amd64 MinGW ABI。使用 Zig 时可在 Linux shell 中指定 `CC="zig cc -target x86_64-linux-gnu.2.28"` 后执行 `make build`；原生 GCC 默认链接构建机 glibc，不保证兼容更旧的 glibc。
 
 隔离集成测试需要 Python 3、PyYAML、OpenSSL、curl 和 CPA 可执行文件。测试自建临时目录、mock 凭证与 TLS 上游，不读取生产配置或调用真实模型：
 
 ```sh
-python3 tests/integration.py --cpa-binary /path/to/cli-proxy-api --plugin /path/to/cpa-agentrouter-continuity-v0.4.1.so
+python3 tests/integration.py --cpa-binary /path/to/cli-proxy-api --plugin /path/to/cpa-agentrouter-continuity-v0.4.5.so
 ```
+
+该测试在 Linux 上实际加载共享库，核对源码版本，覆盖限流/断流恢复、内容过滤终止、桌面工具往返、凭证管理、会话来源、并发名额、配置热加载和取消。`--expected-version` 可指定其他待验版本；`--previous-plugin` 可追加旧库热升级验证。测试结果与平台边界见 [VALIDATION.md](VALIDATION.md)。
 
 独立 AR 探针可用 `go build -tags probe -o cpa-agentrouter-probe .` 构建；默认插件不包含探针入口。真实探针需自行提供运行时配置及调用授权。
 
@@ -166,12 +173,12 @@ python3 tests/integration.py --cpa-binary /path/to/cli-proxy-api --plugin /path/
 ```sh
 make build
 python3 scripts/package_release.py \
-  --binary dist/linux/amd64/cpa-agentrouter-continuity-v0.4.1.so \
+  --binary dist/linux/amd64/cpa-agentrouter-continuity-v0.4.5.so \
   --output-dir dist/release
 
 python3 scripts/package_release.py \
   --platform windows-amd64 \
-  --binary dist/windows/amd64/cpa-agentrouter-continuity-v0.4.1.dll \
+  --binary dist/windows/amd64/cpa-agentrouter-continuity-v0.4.5.dll \
   --output-dir dist/release
 ```
 

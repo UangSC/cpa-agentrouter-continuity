@@ -133,11 +133,19 @@ func runJSON(ctx context.Context, q execution, c credential, body []byte) ([]byt
 			raw, err = readAll(s.StreamID)
 		}
 		if err == nil && s.Status >= 200 && s.Status < 300 && classify(s.Status, raw) == "" {
+			if e := incompleteError(raw); e != nil {
+				failures.Add(1)
+				reason = e.Code
+				return nil, e
+			}
 			if b.used > 0 {
 				recovered.Add(1)
 			}
 			outcome = "completed"
 			reason = ""
+			if q.toolNamespaceAliased {
+				raw, _ = rewriteToolNames(raw, collaborationAlias, "collaboration")
+			}
 			return raw, nil
 		}
 		kind := classify(s.Status, raw)
@@ -167,6 +175,10 @@ func compact(q execution, c credential) (any, error) {
 	if e != nil {
 		return nil, e
 	}
+	payload, q.toolNamespaceAliased, e = aliasRequestTools(payload)
+	if e != nil {
+		return nil, e
+	}
 	s, e := startHTTP(q, c, payload, "responses/compact")
 	if e != nil {
 		return nil, e
@@ -177,6 +189,9 @@ func compact(q execution, c credential) (any, error) {
 	}
 	if s.Status >= 400 {
 		return nil, safeError(s.Status, raw, c.APIKey)
+	}
+	if q.toolNamespaceAliased {
+		raw, _ = rewriteToolNames(raw, collaborationAlias, "collaboration")
 	}
 	return sdk.ExecutorResponse{Payload: raw}, nil
 }

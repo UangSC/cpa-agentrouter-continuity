@@ -274,6 +274,47 @@ func TestFreshDetectionIsConservative(t *testing.T) {
 		}
 	}
 }
+
+func TestExplicitNewInitializationReplacesStaleForeignOrigin(t *testing.T) {
+	routeFixture(t)
+	// Simulate a previous failed attempt that CPA recorded as native Codex.
+	raw := "stale-session"
+	digestID := digest("test-caller\x00" + raw)
+	if err := withRoutingLedger(func(s *routingLedger) error {
+		s.Origins[digestID] = sessionOrigin{Provider: "codex", Foreign: true}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"input":[{"type":"additional_tools","role":"developer","tools":[]},{"role":"user","content":"hello"}]}`)
+	headers := http.Header{"Session-Id": {raw}}
+	metadata := map[string]any{"caller_scope": "test-caller", "history_initialization": "new"}
+	before := beforeAdmission(sdk.RequestInterceptRequest{RequestID: "retry-new", Headers: headers, Body: body, Metadata: metadata})
+	headers.Set(admissionHeader, before.Headers.Get(admissionHeader))
+	picked := pickAdmission(sdk.SchedulerPickRequest{Model: "test-model", Options: sdk.SchedulerOptions{Headers: headers, Metadata: metadata}, Candidates: []sdk.SchedulerAuthCandidate{arCandidate("ar", "mock-secret", 15), otherCandidate()}})
+	if picked.AuthID != "ar" || picked.Reject {
+		t.Fatalf("explicit new initialization did not replace stale foreign origin: %+v", picked)
+	}
+}
+
+func TestColdResumeCannotReplaceForeignOrigin(t *testing.T) {
+	routeFixture(t)
+	raw := "stale-session"
+	digestID := digest("test-caller\x00" + raw)
+	_ = withRoutingLedger(func(s *routingLedger) error {
+		s.Origins[digestID] = sessionOrigin{Provider: "codex", Foreign: true}
+		return nil
+	})
+	body := []byte(`{"input":[{"role":"user","content":"hello"}]}`)
+	headers := http.Header{"Session-Id": {raw}}
+	metadata := map[string]any{"caller_scope": "test-caller", "history_initialization": "cold_resume"}
+	before := beforeAdmission(sdk.RequestInterceptRequest{RequestID: "resume-old", Headers: headers, Body: body, Metadata: metadata})
+	headers.Set(admissionHeader, before.Headers.Get(admissionHeader))
+	picked := pickAdmission(sdk.SchedulerPickRequest{Model: "test-model", Options: sdk.SchedulerOptions{Headers: headers, Metadata: metadata}, Candidates: []sdk.SchedulerAuthCandidate{arCandidate("ar", "mock-secret", 15), otherCandidate()}})
+	if picked.AuthID != "other" || picked.Reject {
+		t.Fatalf("cold resume entered AR: %+v", picked)
+	}
+}
 func TestOriginLedgerContainsNoConversationOrKey(t *testing.T) {
 	routeFixture(t)
 	routeRequest("r", "sensitive-session-id", true, arCandidate("ar", "mock-secret", 10))

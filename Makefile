@@ -1,5 +1,5 @@
 GO ?= go
-VERSION := 0.4.1
+VERSION := $(shell sed -n 's/^const version = "\([^"]*\)"/\1/p' plugin.go)
 OS := $(shell $(GO) env GOOS)
 ARCH := $(shell $(GO) env GOARCH)
 EXT := so

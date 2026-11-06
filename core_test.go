@@ -72,6 +72,31 @@ func TestErrorClassification(t *testing.T) {
 		})
 	}
 }
+
+func TestIncompleteReasonAndContentFilterPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"top-level", `{"status":"incomplete","incomplete_details":{"reason":"content_filter"}}`, "content_filter"},
+		{"event", `{"type":"response.incomplete","response":{"incomplete_details":{"reason":"content-filter"}}}`, "content_filter"},
+		{"other", `{"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}`, "max_output_tokens"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := incompleteReason([]byte(tc.raw)); got != tc.want {
+				t.Fatalf("reason=%q want %q", got, tc.want)
+			}
+		})
+	}
+	if e := incompleteError([]byte(`{"incomplete_details":{"reason":"max_output_tokens"}}`)); e != nil {
+		t.Fatal("max_output_tokens must remain a normal incomplete response")
+	}
+	e := incompleteError([]byte(`{"incomplete_details":{"reason":"content_filter"}}`))
+	if e == nil || e.Code != "ar_content_filter" || !strings.Contains(e.Message, "content_filter") {
+		t.Fatalf("unexpected content filter error: %#v", e)
+	}
+}
 func TestHistoryAlwaysPreserved(t *testing.T) {
 	for _, raw := range []string{`{"input":[{"type":"reasoning","id":"rs_old","encrypted_content":"keep"},{"type":"function_call","id":"fc_old","call_id":"pair"}],"reasoning":{"effort":"high"}}`, `{"input":[{"type":"compaction","encrypted_content":"opaque"}],"previous_response_id":"previous"}`} {
 		body, err := prepareBody([]byte(raw), "test", true)
@@ -214,6 +239,73 @@ func TestDecryptFailureRequestsNewSessionWithoutReplay(t *testing.T) {
 	}
 	if !bytes.Contains(bytes.Join(m.emitted, nil), []byte("ar_new_session_required")) {
 		t.Fatal("missing new session hint")
+	}
+}
+
+func TestContentFilterFailsFastWithoutReplay(t *testing.T) {
+	m := &mockHost{attempts: []attempt{{200, "", []string{
+		sse(`{"type":"response.created"}`),
+		sse(`{"type":"response.output_text.delta","delta":"I'm sorry"}`),
+		sse(`{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"content_filter"}}}`),
+	}}}}
+	withMock(t, m)
+	runStreaming(context.Background(), execution{StreamID: "down"}, testCredential(), []byte(`{}`))
+	if m.started != 1 {
+		t.Fatalf("content_filter was replayed: %d attempts", m.started)
+	}
+	wire := string(bytes.Join(m.emitted, nil))
+	if !strings.Contains(wire, "ar_content_filter") || !strings.Contains(wire, "content_filter") {
+		t.Fatalf("missing explicit content filter failure: %s", wire)
+	}
+	if strings.Contains(wire, `"type":"response.incomplete"`) {
+		t.Fatal("forwarded replayable response.incomplete")
+	}
+}
+
+func TestContentFilterBeforeOutputFailsWithoutReplay(t *testing.T) {
+	m := &mockHost{attempts: []attempt{{200, "", []string{
+		sse(`{"type":"response.created"}`),
+		sse(`{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"content_filter"}}}`),
+	}}}}
+	withMock(t, m)
+	runStreaming(context.Background(), execution{StreamID: "down"}, testCredential(), []byte(`{}`))
+	wire := bytes.Join(m.emitted, nil)
+	if m.started != 1 || m.closed != 1 || bytes.Count(wire, []byte(`"type":"response.failed"`)) != 1 || !bytes.Contains(wire, []byte("ar_content_filter")) {
+		t.Fatalf("expected one terminal failure and no replay: attempts=%d closed=%d wire=%s", m.started, m.closed, wire)
+	}
+	if bytes.Contains(wire, []byte("response.incomplete")) {
+		t.Fatal("content_filter incomplete event was forwarded")
+	}
+}
+
+func TestJSONIncompletePolicy(t *testing.T) {
+	for _, reason := range []string{"content_filter", "max_output_tokens"} {
+		t.Run(reason, func(t *testing.T) {
+			raw := `{"status":"incomplete","incomplete_details":{"reason":"` + reason + `"},"output":[]}`
+			m := &mockHost{attempts: []attempt{{200, "", []string{raw}}}}
+			withMock(t, m)
+			got, err := runJSON(context.Background(), execution{}, testCredential(), []byte(`{}`))
+			if m.started != 1 || m.closed != 1 {
+				t.Fatalf("incomplete response replayed or left open: %+v", m)
+			}
+			if reason == "content_filter" {
+				if err == nil || asRPCError(err).Code != "ar_content_filter" || asRPCError(err).HTTPStatus != 400 || len(got) != 0 {
+					t.Fatalf("expected content_filter HTTP 400: %s %v", got, err)
+				}
+			} else if err != nil || string(got) != raw {
+				t.Fatalf("ordinary incomplete response changed: %s %v", got, err)
+			}
+		})
+	}
+}
+
+func TestMaxOutputTokensStreamPreserved(t *testing.T) {
+	frame := sse(`{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}`)
+	m := &mockHost{attempts: []attempt{{200, "", []string{frame}}}}
+	withMock(t, m)
+	runStreaming(context.Background(), execution{StreamID: "down"}, testCredential(), []byte(`{}`))
+	if m.started != 1 || m.closed != 1 || string(bytes.Join(m.emitted, nil)) != frame {
+		t.Fatal("max_output_tokens event changed or replayed")
 	}
 }
 func TestNeverReplayAfterToolOrText(t *testing.T) {

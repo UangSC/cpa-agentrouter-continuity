@@ -149,6 +149,7 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 		kind := ""
 		var failure []byte
 		var attemptErr error
+		var incompleteFailure *rpcError
 		for ctx.Err() == nil {
 			chunk, err := readHTTP(s.StreamID)
 			frames, parseErr := parser.feed(chunk.Payload)
@@ -156,8 +157,23 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 				err = parseErr
 			}
 			for _, f := range frames {
+				if q.toolNamespaceAliased {
+					f = restoreToolFrame(f)
+				}
 				d := eventData(f)
 				t := eventType(d)
+				// content_filter is a terminal upstream decision.  Do not forward
+				// response.incomplete: Codex treats that event as replayable and can
+				// submit the same expensive history repeatedly.  Emit one explicit
+				// failure instead, while preserving any text already delivered.
+				if t == "response.incomplete" {
+					if e := incompleteError(d); e != nil {
+						failure = d
+						incompleteFailure = e
+						attemptErr = fmt.Errorf("upstream response incomplete: content_filter")
+						break
+					}
+				}
 				if t == "response.failed" || t == "error" {
 					failure = d
 					if !committed {
@@ -218,6 +234,10 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 				outcome = "canceled"
 				reason = "client_disconnected"
 			}
+			return
+		}
+		if incompleteFailure != nil {
+			terminal(incompleteFailure)
 			return
 		}
 		if committed {

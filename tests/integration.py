@@ -1,7 +1,7 @@
 """Run only against an isolated CPA process and a local, TLS mock of AR.
 No production credentials or real provider traffic are used.
 """
-import argparse, shutil, tempfile, http.server, json, os, pathlib, socket, socketserver, ssl, subprocess, threading, time, urllib.request, urllib.error
+import argparse, shutil, tempfile, http.server, json, os, pathlib, re, socket, socketserver, ssl, subprocess, threading, time, urllib.request, urllib.error
 import yaml
 
 ROOT = None
@@ -42,11 +42,33 @@ class Upstream(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b'{"error":{"type":"invalid_request_error","message":"The encrypted content for item rs_old could not be verified. Reason: Encrypted content could not be decrypted or parsed."}}'); return
         if scenario == 'auth':
             self.send_response(401);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(b'{"error":{"code":"invalid_api_key"}}');return
+        terminal = None
+        if scenario.startswith(('content_filter', 'max_output_tokens')):
+            reason = 'content_filter' if scenario.startswith('content_filter') else 'max_output_tokens'
+            terminal = {'id':'resp_mock','object':'response','status':'incomplete','model':data['model'],
+                        'incomplete_details':{'reason':reason},'output':[]}
+        elif scenario.startswith('desktop_tools'):
+            definition = data['input'][0]
+            assert definition['type'] == 'additional_tools'
+            assert definition['tools'][0]['name'] == 'cpa_ar_collaboration'
+            assert data['input'][1]['content'] == 'collaboration.wait_agent protocol test'
+            terminal = {'id':'resp_mock','object':'response','status':'completed','model':data['model'],
+                        'output':[{'type':'function_call','namespace':'cpa_ar_collaboration','name':'wait_agent',
+                                   'call_id':'call_mock','arguments':'{"timeout_ms":10000}'}]}
+        if terminal is not None and not data.get('stream'):
+            self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers()
+            self.wfile.write(json.dumps(terminal).encode());return
         self.send_response(200);self.send_header('Content-Type','text/event-stream');self.end_headers()
         def event(value):
             raw=('data: '+json.dumps(value)+'\n\n').encode()
             self.wfile.write(raw);self.wfile.flush()
         event({'type':'response.created','response':{'id':'resp_mock','status':'in_progress'}})
+        if terminal is not None:
+            if scenario == 'content_filter_after':
+                event({'type':'response.output_text.delta','delta':'Filtered response'})
+            if scenario.startswith('desktop_tools'):
+                event({'type':'response.output_item.added','item':terminal['output'][0]})
+            event({'type':'response.'+terminal['status'],'response':terminal});return
         if scenario == 'disconnect' and attempt == 1: return
         if scenario == 'hold' or scenario.startswith('slot-'):
             STARTED.set();RELEASE.wait(20)
@@ -90,18 +112,21 @@ class Server(socketserver.ThreadingTCPServer):
     daemon_threads=True
 
 if __name__ == '__main__':
-    parser=argparse.ArgumentParser()
-    parser.add_argument('--cpa-binary',required=True)
-    parser.add_argument('--plugin',required=True)
-    parser.add_argument('--previous-plugin')
-    parser.add_argument('--work-parent')
-    parser.add_argument('--hold-ui',action='store_true')
+    parser=argparse.ArgumentParser(description='使用隔离的 Linux CPA 与本地 TLS 模拟上游验证插件')
+    parser.add_argument('--cpa-binary',required=True,help='Linux CPA 可执行文件的绝对路径')
+    parser.add_argument('--plugin',required=True,help='待验证的 Linux amd64 .so 路径')
+    parser.add_argument('--previous-plugin',help='可选的旧版 .so，用于热升级验证')
+    parser.add_argument('--work-parent',help='测试临时目录的父目录')
+    parser.add_argument('--hold-ui',action='store_true',help='完成测试后保留界面供人工检查')
+    parser.add_argument('--expected-version',help='预期插件版本，默认读取当前源码')
     args=parser.parse_args()
+    expected_version=args.expected_version or re.search(r'const version = "([^"]+)"', (pathlib.Path(__file__).resolve().parents[1]/'plugin.go').read_text(encoding='utf-8'))[1]
     ROOT=pathlib.Path(tempfile.mkdtemp(prefix='cpa-agentrouter-continuity-test-',dir=args.work_parent))
     print('TEST_WORKSPACE',str(ROOT),flush=True)
     plugins=ROOT/'plugins/linux/amd64';plugins.mkdir(parents=True)
     first=args.previous_plugin or args.plugin
-    shutil.copy2(first,plugins/('cpa-agentrouter-continuity-v0.1.0.so' if args.previous_plugin else 'cpa-agentrouter-continuity-v0.4.0.so'))
+    current_plugin=plugins/f'cpa-agentrouter-continuity-v{expected_version}.so'
+    shutil.copy2(first,plugins/'cpa-agentrouter-continuity-v0.1.0.so' if args.previous_plugin else current_plugin)
     cert=ROOT/'mock-cert.pem'; key=ROOT/'mock-key.pem'
     subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-keyout',str(key),'-out',str(cert),'-days','1','-subj','/CN=agentrouter.org','-addext','subjectAltName=DNS:agentrouter.org'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     key.chmod(0o600)
@@ -123,8 +148,13 @@ if __name__ == '__main__':
     def manage(path,body=None,method='GET',key='mock-management'):
         req=urllib.request.Request('http://127.0.0.1:'+str(listen)+'/v0/management/plugins/cpa-agentrouter-continuity'+path,data=None if body is None else json.dumps(body).encode(),method=method,headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'})
         with op.open(req,timeout=10) as response:return json.loads(response.read())
-    def request(scenario):
-        body={'model':'ar/ar-mock-model','input':[{'type':'message','role':'user','content':'Reply OK'}],'stream':True,'metadata':{'test_scenario':scenario}}
+    def request(scenario,stream=True):
+        body={'model':'ar/ar-mock-model','input':[{'type':'message','role':'user','content':'Reply OK'}],'stream':stream,'metadata':{'test_scenario':scenario}}
+        if scenario.startswith('desktop_tools'):
+            body['input']=[{'type':'additional_tools','id':'at_mock','role':'developer','tools':[
+                {'type':'namespace','name':'collaboration','tools':[{'type':'function','name':'wait_agent',
+                 'parameters':{'type':'object','properties':{'timeout_ms':{'type':'integer'}}}}]}]},
+                {'role':'user','content':'collaboration.wait_agent protocol test'}]
         if scenario=='decrypt':body['input'].insert(0,{'type':'reasoning','id':'rs_old','encrypted_content':'bad'})
         req=urllib.request.Request('http://127.0.0.1:'+str(listen)+'/v1/responses',data=json.dumps(body).encode(),headers={'Authorization':'Bearer mock-client','Content-Type':'application/json','Session_id':'test-session-'+scenario})
         return op.open(req,timeout=45).read().decode()
@@ -141,13 +171,13 @@ if __name__ == '__main__':
         if args.previous_plugin:
             response=[]
             holding=threading.Thread(target=lambda:response.append(request('hold')));holding.start();assert STARTED.wait(5)
-            shutil.copy2(args.plugin,plugins/'cpa-agentrouter-continuity-v0.4.0.so')
+            shutil.copy2(args.plugin,current_plugin)
             cfg['plugins']['configs']['cpa-agentrouter-continuity']['priority']=1
             config.write_text(yaml.safe_dump(cfg))
             for _ in range(60):
                 try:
                     status=manage('/overview')
-                    if status['version']=='0.4.0':break
+                    if status['version']==expected_version:break
                 except Exception:pass
                 time.sleep(.2)
             else:raise AssertionError('new plugin version not active')
@@ -155,6 +185,8 @@ if __name__ == '__main__':
             assert response and 'response.completed' in response[0] and process.poll() is None
             print('PASS binary-hot-upgrade-with-active-stream',flush=True)
             STARTED.clear();RELEASE.clear()
+        assert manage('/overview')['version']==expected_version
+        print('PASS loaded-version',expected_version,flush=True)
         # New installs need no explicit User-Agent or Originator fields.
         credential['headers']={}
         (auth/'ar-mock.json').write_text(json.dumps(credential))
@@ -171,6 +203,49 @@ if __name__ == '__main__':
             assert response.count('"delta": "OK"')<=1,(scenario,response)
             print('PASS',scenario,'attempts',attempts,'default_headers=True',flush=True)
         history=[d for s,d in CAPTURE if s=='decrypt'];assert any(x.get('type')=='reasoning' for x in history[0]['input']);assert len(history)==1
+        for scenario,stream in [('content_filter_before',True),('content_filter_after',True),('content_filter_json',False)]:
+            try:response=request(scenario,stream)
+            except urllib.error.HTTPError as error:
+                assert not stream and error.code==400,(scenario,error.code)
+                response=error.read().decode()
+            else:assert stream,'JSON content_filter must return an HTTP error'
+            assert COUNTS.get(scenario)==1,(scenario,COUNTS)
+            assert 'content_filter' in response and 'response.incomplete' not in response,(scenario,response)
+            if stream:
+                events=[json.loads(line[5:]) for line in response.splitlines() if line.startswith('data:') and line[5:].strip()!='[DONE]']
+                # CPA may normalize the plugin's response.failed into an error event.
+                errors=[v for v in events if v.get('type') in ('error','response.failed')]
+                assert len(errors)==1,response
+                error=errors[0].get('error') or errors[0].get('response',{}).get('error',{})
+                assert error.get('code')=='ar_content_filter',response
+            else:
+                # CPA 8.0.34 keeps HTTP 400 and the reason but omits the JSON code field.
+                error=json.loads(response)['error']
+                assert error['type']=='invalid_request_error' and 'content_filter' in error['message']
+            if scenario=='content_filter_after':assert 'Filtered response' in response
+            print('PASS',scenario,'attempts=1 explicit terminal error',flush=True)
+        for stream in [True,False]:
+            scenario='max_output_tokens' if stream else 'max_output_tokens_json'
+            response=request(scenario,stream)
+            assert COUNTS.get(scenario)==1 and 'max_output_tokens' in response and 'ar_content_filter' not in response
+            assert ('response.incomplete' in response) if stream else json.loads(response)['status']=='incomplete'
+            print('PASS',scenario,'normal incomplete response preserved',flush=True)
+            scenario='desktop_tools_stream' if stream else 'desktop_tools_json'
+            response=request(scenario,stream)
+            assert COUNTS.get(scenario)==1 and 'cpa_ar_collaboration' not in response
+            values=[json.loads(line[5:]) for line in response.splitlines() if line.startswith('data:') and line[5:].strip()!='[DONE]'] if stream else [json.loads(response)]
+            final=next(v['response'] for v in values if v.get('type')=='response.completed') if stream else values[0]
+            call=final['output'][0]
+            assert call['namespace']=='collaboration' and call['name']=='wait_agent' and call['call_id']=='call_mock'
+            assert json.loads(call['arguments'])=={'timeout_ms':10000}
+            if stream:
+                added=next(v['item'] for v in values if v.get('type')=='response.output_item.added')
+                assert added==call
+            print('PASS',scenario,'desktop admission and tool alias round trip',flush=True)
+        recent=manage('/overview')['logs']['recent']
+        filtered=[r for r in recent if r.get('error_code')=='ar_content_filter']
+        assert len(filtered)==3 and all(r['status']=='failed' and r['attempts']==1 for r in filtered)
+        print('PASS content_filter request logs',flush=True)
         for key in ['', 'mock-client', 'invalid-management']:
             try:manage('/overview',key=key)
             except urllib.error.HTTPError as error:assert error.code in (401,403)

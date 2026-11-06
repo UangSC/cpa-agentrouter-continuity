@@ -22,7 +22,7 @@ const maxConcurrentSessions = 2
 
 type admissionRequest struct {
 	ID, Session, RawSession, PreferredAuth string
-	Fresh                                  bool
+	Fresh, ExplicitFresh                   bool
 }
 
 var admissionRequests sync.Map
@@ -109,6 +109,23 @@ func freshConversation(body []byte, meta map[string]any) bool {
 		if len(item["encrypted_content"]) > 0 || len(item["call_id"]) > 0 || len(item["tool_calls"]) > 0 {
 			return false
 		}
+		// Codex Desktop sends tool definitions as a developer input item even
+		// on its first turn. These definitions are not assistant/tool history.
+		if kind == "additional_tools" {
+			if role != "developer" && role != "system" {
+				return false
+			}
+			for name := range item {
+				if name != "type" && name != "id" && name != "role" && name != "tools" {
+					return false
+				}
+			}
+			var tools []map[string]json.RawMessage
+			if json.Unmarshal(item["tools"], &tools) != nil || tools == nil {
+				return false
+			}
+			continue
+		}
 		if kind != "" && kind != "message" {
 			return false
 		}
@@ -124,7 +141,7 @@ func freshConversation(body []byte, meta map[string]any) bool {
 }
 func beforeAdmission(q sdk.RequestInterceptRequest) sdk.RequestInterceptResponse {
 	session, raw := stableSession(q.Headers, q.Body, q.Metadata)
-	r := admissionRequest{ID: q.RequestID, Session: session, RawSession: raw, Fresh: freshConversation(q.Body, q.Metadata)}
+	r := admissionRequest{ID: q.RequestID, Session: session, RawSession: raw, Fresh: freshConversation(q.Body, q.Metadata), ExplicitFresh: stringMeta(q.Metadata, "history_initialization") == "new"}
 	admissionRequests.Store(q.RequestID, r)
 	// Always overwrite a client-supplied admission marker; it is never trusted.
 	return sdk.RequestInterceptResponse{Headers: http.Header{admissionHeader: {q.RequestID}}}
@@ -272,7 +289,11 @@ func pickAdmission(q sdk.SchedulerPickRequest) sdk.SchedulerPickResponse {
 			s.Origins[r.Session] = origin
 			known = true
 		}
-		eligible := ok && r.ID != "" && r.Session != "" && ((known && !origin.Foreign && origin.Provider == pluginID) || (!known && r.Fresh))
+		// A retry after an earlier failed first turn can leave a foreign ledger
+		// entry behind. Codex explicitly marks a genuinely new initialization;
+		// permit that one clean first turn to replace the stale marker. A cold
+		// resume, assistant history, tool result or encrypted item remains out.
+		eligible := ok && r.ID != "" && r.Session != "" && ((known && !origin.Foreign && origin.Provider == pluginID) || (!known && r.Fresh) || (known && origin.Foreign && r.Fresh && r.ExplicitFresh))
 		allowed := []sdk.SchedulerAuthCandidate{}
 		for _, candidate := range q.Candidates {
 			if candidate.Provider == pluginID {
@@ -305,7 +326,7 @@ func pickAdmission(q sdk.SchedulerPickRequest) sdk.SchedulerPickResponse {
 		}
 		if r.Session != "" {
 			if chosen.Provider == pluginID {
-				if !known {
+				if !known || (origin.Foreign && r.ExplicitFresh) {
 					s.Origins[r.Session] = sessionOrigin{Provider: pluginID, AuthID: chosen.ID, KeyHash: keyForCandidate(chosen)}
 				}
 				s.Leases[id] = admissionLease{Session: r.Session, KeyHash: keyForCandidate(chosen), AuthID: chosen.ID, RequestID: id, Created: time.Now().UTC()}

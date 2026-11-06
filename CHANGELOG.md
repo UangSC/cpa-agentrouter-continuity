@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.5 - 2026-11-06
+
+- 兼容桌面端首轮 `additional_tools` 定义；仅在正文通过新会话检查且显式标记 `history_initialization=new` 时，允许替换旧的外部来源记录。
+- 对 AR 请求中的 `collaboration` 工具命名空间使用兼容别名，并在 SSE、JSON 和 compact 响应中还原；保留工具参数、结果、正文与加密历史。
+- 将上游 `content_filter` 转为明确的 `ar_content_filter` 终止错误，插件不自动重试；其他未完成原因继续透传。客户端仍可能自行发起新的请求。
+- Linux 和 Windows 共用以上修复；构建文件名从源码版本生成，隔离集成测试核实加载版本，并覆盖过滤处理及桌面工具往返。
+
 ## 0.4.1
 
 - Add Windows amd64 support for the session ledger's cross-process file lock.

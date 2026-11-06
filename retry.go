@@ -11,6 +11,49 @@ import (
 	"time"
 )
 
+// incompleteReason extracts the Responses API terminal reason from either a
+// response.incomplete SSE event or a non-stream response object.  The API
+// places incomplete_details at the top level for JSON and under response for
+// events, so both shapes must be handled.
+func incompleteReason(raw []byte) string {
+	var root struct {
+		IncompleteDetails *struct {
+			Reason string `json:"reason"`
+		} `json:"incomplete_details"`
+		Response *struct {
+			IncompleteDetails *struct {
+				Reason string `json:"reason"`
+			} `json:"incomplete_details"`
+		} `json:"response"`
+	}
+	if json.Unmarshal(raw, &root) != nil {
+		return ""
+	}
+	if root.IncompleteDetails != nil && root.IncompleteDetails.Reason != "" {
+		return normalizeIncompleteReason(root.IncompleteDetails.Reason)
+	}
+	if root.Response != nil && root.Response.IncompleteDetails != nil {
+		return normalizeIncompleteReason(root.Response.IncompleteDetails.Reason)
+	}
+	return ""
+}
+
+func normalizeIncompleteReason(reason string) string {
+	reason = strings.ToLower(strings.TrimSpace(reason))
+	return strings.ReplaceAll(reason, "-", "_")
+}
+
+func incompleteError(raw []byte) *rpcError {
+	if incompleteReason(raw) != "content_filter" {
+		return nil
+	}
+	return &rpcError{
+		Code:       "ar_content_filter",
+		Message:    "上游返回未完成响应，原因：content_filter。插件未自动重试，以避免重复扣费；请使用空白会话重试。",
+		HTTPStatus: 400,
+	}
+}
+
 func classify(status int, raw []byte) string {
 	var root map[string]any
 	_ = json.Unmarshal(raw, &root)

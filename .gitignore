@@ -1,4 +1,6 @@
 dist/
+build/
+VALIDATION-*-local.md
 *.so
 *.dylib
 *.dll

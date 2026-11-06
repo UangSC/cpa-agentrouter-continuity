@@ -13,7 +13,7 @@ import (
 
 const pluginID = "cpa-agentrouter-continuity"
 
-const version = "0.4.1"
+const version = "0.4.5"
 
 const maxBuffer = 8 << 20
 
@@ -41,8 +41,9 @@ func asRPCError(err error) *rpcError {
 
 type execution struct {
 	sdk.ExecutorRequest
-	StreamID   string `json:"stream_id"`
-	CallbackID string `json:"host_callback_id"`
+	StreamID             string `json:"stream_id"`
+	CallbackID           string `json:"host_callback_id"`
+	toolNamespaceAliased bool
 }
 
 type hostFunc func(string, any, any) error
@@ -157,6 +158,10 @@ func handle(method string, raw []byte) (any, error) {
 			return nil, e
 		}
 		body, e := prepareBody(q.Payload, upstreamModel, method == "executor.execute_stream")
+		if e != nil {
+			return nil, e
+		}
+		body, q.toolNamespaceAliased, e = aliasRequestTools(body)
 		if e != nil {
 			return nil, e
 		}
