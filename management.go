@@ -56,7 +56,7 @@ func managementRegistration() any {
 	for _, item := range [][2]string{{"GET", "/overview"}, {"GET", "/credentials"}, {"POST", "/credentials"}, {"PUT", "/credentials"}, {"POST", "/health"}, {"POST", "/models"}} {
 		routes = append(routes, map[string]string{"method": item[0], "path": apiPrefix + item[1]})
 	}
-	return map[string]any{"routes": routes, "resources": []map[string]string{{"path": "/ui", "menu": "CPA AgentRouter Continuity", "description": "AR API Key、请求日志与健康状态"}, {"path": "/status"}, {"path": "/app.js"}, {"path": "/style.css"}}}
+	return map[string]any{"routes": routes, "resources": []map[string]string{{"path": "/ui", "menu": "AR Continuity", "description": "AR API Key、请求日志与健康状态"}, {"path": "/status"}, {"path": "/app.js"}, {"path": "/style.css"}, {"path": "/logo.png"}}}
 }
 func jsonResponse(status int, value any) sdk.ManagementResponse {
 	body, _ := json.Marshal(value)
@@ -77,6 +77,8 @@ func managementHandle(raw []byte) (any, error) {
 			mime = "text/javascript; charset=utf-8"
 		case "style.css":
 			mime = "text/css; charset=utf-8"
+		case "logo.png":
+			mime = "image/png"
 		default:
 			return jsonResponse(404, map[string]string{"error": "页面不存在"}), nil
 		}

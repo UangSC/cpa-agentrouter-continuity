@@ -13,7 +13,7 @@ import (
 
 const pluginID = "cpa-agentrouter-continuity"
 
-const version = "0.4.5"
+const version = "0.4.6"
 
 const maxBuffer = 8 << 20
 
@@ -55,7 +55,7 @@ var active sync.Map
 var requests, retries, recovered, failures atomic.Uint64
 
 func registration() any {
-	return map[string]any{"schema_version": 6, "metadata": map[string]any{"Name": pluginID, "Version": version, "Author": "UangSC", "GitHubRepository": "https://github.com/UangSC/cpa-agentrouter-continuity", "ConfigFields": []any{}}, "capabilities": map[string]any{"auth_provider": true, "model_provider": true, "executor": true, "executor_model_scope": "both", "executor_input_formats": []string{"responses"}, "executor_output_formats": []string{"responses"}, "management_api": true, "scheduler": true, "scheduler_across_priorities": true, "request_interceptor": true, "request_lifecycle_plugin": true}}
+	return map[string]any{"schema_version": 6, "metadata": map[string]any{"Name": "AR Continuity", "Version": version, "Author": "UangSC", "GitHubRepository": "https://github.com/UangSC/cpa-agentrouter-continuity", "Logo": resourcePrefix + "/logo.png", "ConfigFields": []any{}}, "capabilities": map[string]any{"auth_provider": true, "model_provider": true, "executor": true, "executor_model_scope": "both", "executor_input_formats": []string{"responses"}, "executor_output_formats": []string{"responses"}, "management_api": true, "scheduler": true, "scheduler_across_priorities": true, "request_interceptor": true, "request_lifecycle_plugin": true}}
 }
 
 func handle(method string, raw []byte) (any, error) {

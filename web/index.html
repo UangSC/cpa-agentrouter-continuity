@@ -1,9 +1,9 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CPA AgentRouter Continuity</title><link rel="stylesheet" href="/v0/resource/plugins/cpa-agentrouter-continuity/style.css"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentRouter Continuity</title><link rel="icon" type="image/png" href="/v0/resource/plugins/cpa-agentrouter-continuity/logo.png"><link rel="stylesheet" href="/v0/resource/plugins/cpa-agentrouter-continuity/style.css"></head>
 <body>
 <main class="shell">
- <header class="heading"><div class="brand"><span class="brand-mark">AR</span><div><h1>CPA AgentRouter Continuity</h1><p>AgentRouter API 管理</p></div></div><div class="actions"><span id="connection" class="badge">未连接</span><span id="version" class="muted"></span><button id="refresh" hidden>刷新</button><button id="disconnect" class="quiet" hidden>断开连接</button></div></header>
+ <header class="heading"><div class="brand"><img class="brand-mark" src="/v0/resource/plugins/cpa-agentrouter-continuity/logo.png" alt="AR Continuity"><div><h1>AgentRouter Continuity</h1><p>AgentRouter API 管理</p></div></div><div class="actions"><span id="connection" class="badge">未连接</span><span id="version" class="muted"></span><button id="refresh" hidden>刷新</button><button id="disconnect" class="quiet" hidden>断开连接</button></div></header>
  <section id="login" class="login card" aria-labelledby="login-title">
   <span class="login-icon" aria-hidden="true">⌘</span><h2 id="login-title">连接 CPA</h2>
   <p>请输入 CPA 管理密钥。登录 CPA 管理面板时勾选「记住密码」，本页会自动使用该密钥。</p>
@@ -22,7 +22,7 @@
 <dialog id="editor" aria-labelledby="editor-title">
  <form id="credential-form">
   <div class="dialog-heading">
-   <div class="dialog-identity"><span class="dialog-emblem" aria-hidden="true">AR</span><div><h2 id="editor-title">新增 API Key</h2><p>AgentRouter · API 凭证</p></div></div>
+   <div class="dialog-identity"><img class="dialog-emblem" src="/v0/resource/plugins/cpa-agentrouter-continuity/logo.png" alt=""><div><h2 id="editor-title">新增 API Key</h2><p>AgentRouter · API 凭证</p></div></div>
    <button type="button" class="icon-button" id="close-editor" aria-label="关闭编辑"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
   </div>
   <div class="editor-tabs" role="tablist" aria-label="凭证配置分类">

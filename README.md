@@ -1,6 +1,6 @@
-# cpa-agentrouter-continuity
+# AR Continuity
 
-当前版本：**0.4.5**。
+当前版本：**0.4.6**。
 
 AgentRouter 专用的 CPA 插件。提供 API Key 管理、请求日志、连接检测，以及 Responses HTTP/SSE 的有限故障恢复。只处理 `https://agentrouter.org/v1`，不拦截其他供应商，不替换 CPA 内置 Codex 执行器。
 
@@ -24,7 +24,7 @@ AgentRouter 专用的 CPA 插件。提供 API Key 管理、请求日志、连接
 
 ## 管理页面
 
-从 CPA 的插件菜单打开 **CPA AgentRouter Continuity**：
+从 CPA 的插件菜单打开 **AR Continuity**：
 
 1. 输入 CPA **管理密钥**，点击「连接」或按回车。
 2. 可勾选「记住密钥」，下次自动连接。也兼容 CPAMC / CPAMP 已记住的管理密钥。
@@ -66,13 +66,13 @@ Originator: codex_exec
 分发的 `.so` 适用于 **Linux amd64 / x86-64、glibc 2.28 或更新**；`.dll` 适用于 **Windows amd64 / x86-64**。本轮 Linux 隔离验证使用 CPA **8.0.34（插件 RPC schema 6）**。其他版本需要兼容同一插件 ABI、管理与流式回调接口；仅看版本号更大不能保证兼容。ARM、macOS 和 musl/Alpine 需要对应平台重新编译。
 
 1. 备份目标机配置。确认服务账号、工作目录、`plugins.dir` 和 `oauth.auth-dir`。
-2. 将 `cpa-agentrouter-continuity-v0.4.5.so` 放入 `<plugins.dir>/linux/amd64/`。目录与文件必须由 CPA 服务账号可读；权限通常为目录 755、插件 644。
+2. 将 `cpa-agentrouter-continuity-v0.4.6.so` 放入 `<plugins.dir>/linux/amd64/`。目录与文件必须由 CPA 服务账号可读；权限通常为目录 755、插件 644。
 3. 在 CPA 插件管理中启用 **cpa-agentrouter-continuity**，完成热加载。无需为了安装插件修改现有供应商配置。
 4. 打开插件页面，输入目标机 CPA 管理密钥，新增 AR API Key；或私下复制已有 AR 凭证到目标机认证目录。凭证应由服务账号拥有、权限 600。不要把认证目录打进公开安装包。
 5. 核对目标机代理和域名分流。插件使用宿主全局代理，**不会自动复制原机器的 mihomo 配置，也不会自动保证非 ISP 出口**。若需要普通节点出口，须在目标机为 `agentrouter.org` 单独设置规则。
 6. 用可选的临时模型前缀验证路由。确认正常后，自行决定是否保留前缀。没有前缀的模型可能参与同名模型的调度。
 
-Windows 使用同一套配置步骤，将 `cpa-agentrouter-continuity-v0.4.5.dll` 放入 `<plugins.dir>/windows/amd64/`。Windows 版本使用系统 `LockFileEx` 保护会话状态，并以进程创建时间区分 PID 重用。
+Windows 使用同一套配置步骤，将 `cpa-agentrouter-continuity-v0.4.6.dll` 放入 `<plugins.dir>/windows/amd64/`。Windows 版本使用系统 `LockFileEx` 保护会话状态，并以进程创建时间区分 PID 重用。
 
 旧的 AR API 提供商条目可以在插件凭证已完整配置并验证后删除。不要同时启用旧条目和新插件凭证，否则旧条目仍可绕过插件。插件凭证独立保存 Key、模型和请求头，删除旧条目不会删除插件凭证。
 
@@ -137,7 +137,7 @@ python3 scripts/check_release.py .
 隔离集成测试需要 Python 3、PyYAML、OpenSSL、curl 和 CPA 可执行文件。测试自建临时目录、mock 凭证与 TLS 上游，不读取生产配置或调用真实模型：
 
 ```sh
-python3 tests/integration.py --cpa-binary /path/to/cli-proxy-api --plugin /path/to/cpa-agentrouter-continuity-v0.4.5.so
+python3 tests/integration.py --cpa-binary /path/to/cli-proxy-api --plugin /path/to/cpa-agentrouter-continuity-v0.4.6.so
 ```
 
 该测试在 Linux 上实际加载共享库，核对源码版本，覆盖限流/断流恢复、内容过滤终止、桌面工具往返、凭证管理、会话来源、并发名额、配置热加载和取消。`--expected-version` 可指定其他待验版本；`--previous-plugin` 可追加旧库热升级验证。测试结果与平台边界见 [VALIDATION.md](VALIDATION.md)。
@@ -173,12 +173,12 @@ python3 tests/integration.py --cpa-binary /path/to/cli-proxy-api --plugin /path/
 ```sh
 make build
 python3 scripts/package_release.py \
-  --binary dist/linux/amd64/cpa-agentrouter-continuity-v0.4.5.so \
+  --binary dist/linux/amd64/cpa-agentrouter-continuity-v0.4.6.so \
   --output-dir dist/release
 
 python3 scripts/package_release.py \
   --platform windows-amd64 \
-  --binary dist/windows/amd64/cpa-agentrouter-continuity-v0.4.5.dll \
+  --binary dist/windows/amd64/cpa-agentrouter-continuity-v0.4.6.dll \
   --output-dir dist/release
 ```
 
