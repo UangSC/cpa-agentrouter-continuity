@@ -76,7 +76,7 @@ func readAll(id string) ([]byte, error) {
 			return nil, fmt.Errorf("response exceeds buffer limit")
 		}
 		if e != nil {
-			return nil, e
+			return b.Bytes(), e
 		}
 		if c.Done {
 			return b.Bytes(), nil
@@ -85,6 +85,9 @@ func readAll(id string) ([]byte, error) {
 }
 
 func safeError(status int, raw []byte, secrets ...string) *rpcError {
+	if failure := pricingConfigError(status, raw, secrets...); failure != nil {
+		return failure
+	}
 	for _, secret := range secrets {
 		if secret != "" {
 			raw = bytes.ReplaceAll(raw, []byte(secret), []byte("[REDACTED]"))
@@ -131,6 +134,11 @@ func runJSON(ctx context.Context, q execution, c credential, body []byte) ([]byt
 		var raw []byte
 		if err == nil {
 			raw, err = readAll(s.StreamID)
+		}
+		if e := pricingFailure(s.Status, raw, err, c.APIKey); e != nil {
+			failures.Add(1)
+			reason = e.Code
+			return nil, e
 		}
 		if err == nil && s.Status >= 200 && s.Status < 300 && classify(s.Status, raw) == "" {
 			if e := incompleteError(raw); e != nil {
@@ -181,9 +189,15 @@ func compact(q execution, c credential) (any, error) {
 	}
 	s, e := startHTTP(q, c, payload, "responses/compact")
 	if e != nil {
+		if failure := pricingFailure(s.Status, nil, e, c.APIKey); failure != nil {
+			return nil, failure
+		}
 		return nil, e
 	}
 	raw, e := readAll(s.StreamID)
+	if failure := pricingFailure(s.Status, raw, e, c.APIKey); failure != nil {
+		return nil, failure
+	}
 	if e != nil {
 		return nil, e
 	}

@@ -111,6 +111,10 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 		recordAttempt(record)
 		s, e := startHTTP(q, c, body, "responses")
 		if e != nil {
+			if failure := pricingFailure(s.Status, nil, e, c.APIKey); failure != nil {
+				terminal(failure)
+				return
+			}
 			if strings.Contains(strings.ToLower(e.Error()), "cancel") {
 				outcome = "canceled"
 				reason = "client_disconnected"
@@ -124,6 +128,10 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 		}
 		if s.Status < 200 || s.Status >= 300 {
 			raw, err := readAll(s.StreamID)
+			if failure := pricingFailure(s.Status, raw, err, c.APIKey); failure != nil {
+				terminal(failure)
+				return
+			}
 			kind := classify(s.Status, raw)
 			if err != nil {
 				kind = transportKind(err)
@@ -149,7 +157,7 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 		kind := ""
 		var failure []byte
 		var attemptErr error
-		var incompleteFailure *rpcError
+		var terminalFailure *rpcError
 		for ctx.Err() == nil {
 			chunk, err := readHTTP(s.StreamID)
 			frames, parseErr := parser.feed(chunk.Payload)
@@ -169,13 +177,18 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 				if t == "response.incomplete" {
 					if e := incompleteError(d); e != nil {
 						failure = d
-						incompleteFailure = e
+						terminalFailure = e
 						attemptErr = fmt.Errorf("upstream response incomplete: content_filter")
 						break
 					}
 				}
 				if t == "response.failed" || t == "error" {
 					failure = d
+					if e := pricingConfigError(0, d, c.APIKey); e != nil {
+						terminalFailure = e
+						attemptErr = e
+						break
+					}
 					if !committed {
 						kind = classify(0, d)
 						attemptErr = fmt.Errorf("upstream failed")
@@ -236,8 +249,11 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 			}
 			return
 		}
-		if incompleteFailure != nil {
-			terminal(incompleteFailure)
+		if terminalFailure == nil {
+			terminalFailure = pricingFailure(0, failure, attemptErr, c.APIKey)
+		}
+		if terminalFailure != nil {
+			terminal(terminalFailure)
 			return
 		}
 		if committed {

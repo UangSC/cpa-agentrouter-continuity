@@ -10,6 +10,7 @@ COUNTS = {}
 CAPTURE = []
 STARTED = threading.Event()
 RELEASE = threading.Event()
+PRICING_DIAGNOSTIC = 'model ar-mock-model tiered expr run failed: expr compile error: unknown name cc12h (1:62)\n| tier("small", cc12h * 25)\n[trace_id=trace-pricing-integration]'
 
 def port():
     with socket.socket() as s:
@@ -42,6 +43,10 @@ class Upstream(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b'{"error":{"type":"invalid_request_error","message":"The encrypted content for item rs_old could not be verified. Reason: Encrypted content could not be decrypted or parsed."}}'); return
         if scenario == 'auth':
             self.send_response(401);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(b'{"error":{"code":"invalid_api_key"}}');return
+        if scenario.startswith('pricing_http_'):
+            status=int(scenario.split('_')[2])
+            self.send_response(status);self.send_header('Content-Type','application/json');self.end_headers()
+            self.wfile.write(json.dumps({'error':{'code':'server_error','message':PRICING_DIAGNOSTIC}}).encode());return
         terminal = None
         if scenario.startswith(('content_filter', 'max_output_tokens')):
             reason = 'content_filter' if scenario.startswith('content_filter') else 'max_output_tokens'
@@ -63,6 +68,11 @@ class Upstream(http.server.BaseHTTPRequestHandler):
             raw=('data: '+json.dumps(value)+'\n\n').encode()
             self.wfile.write(raw);self.wfile.flush()
         event({'type':'response.created','response':{'id':'resp_mock','status':'in_progress'}})
+        if scenario in ('pricing_sse_before','pricing_sse_after','pricing_sse_error'):
+            if scenario=='pricing_sse_after':event({'type':'response.output_text.delta','delta':'Keep this output'})
+            detail={'code':'server_error','message':PRICING_DIAGNOSTIC}
+            event({'type':'error','error':detail} if scenario=='pricing_sse_error' else {'type':'response.failed','response':{'id':'resp_mock','status':'failed','error':detail}})
+            return
         if terminal is not None:
             if scenario == 'content_filter_after':
                 event({'type':'response.output_text.delta','delta':'Filtered response'})
@@ -246,6 +256,34 @@ if __name__ == '__main__':
         filtered=[r for r in recent if r.get('error_code')=='ar_content_filter']
         assert len(filtered)==3 and all(r['status']=='failed' and r['attempts']==1 for r in filtered)
         print('PASS content_filter request logs',flush=True)
+        pricing_cases=[(f'pricing_http_{status}_{mode}',mode=='stream') for status in (400,500) for mode in ('stream','json')]
+        pricing_cases += [(name,True) for name in ('pricing_sse_before','pricing_sse_after','pricing_sse_error')]
+        for scenario,stream in pricing_cases:
+            try:response=request(scenario,stream)
+            except urllib.error.HTTPError as error:
+                assert not stream and error.code==400,(scenario,error.code)
+                response=error.read().decode()
+            else:assert stream,'JSON pricing errors must be terminal HTTP 400'
+            assert COUNTS.get(scenario)==1,(scenario,COUNTS)
+            assert all(value in response for value in ['上游模型计费规则异常','cc12h','trace-pricing-integration']),(scenario,response)
+            if stream:
+                events=[json.loads(line[5:]) for line in response.splitlines() if line.startswith('data:') and line[5:].strip()!='[DONE]']
+                failures=[v for v in events if v.get('type') in ('error','response.failed')]
+                assert len(failures)==1,(scenario,response)
+                detail=failures[0].get('error') or failures[0].get('response',{}).get('error',{})
+                assert detail['code']=='ar_upstream_pricing_error' and detail['http_status']==400
+            else:assert json.loads(response)['error']['type']=='invalid_request_error'
+            if scenario=='pricing_sse_after':assert response.count('Keep this output')==1
+            print('PASS',scenario,'attempts=1 pricing diagnostic preserved',flush=True)
+        rows=manage('/overview')['logs']['recent']
+        pricing=[r for r in rows if r.get('error_code')=='ar_upstream_pricing_error']
+        assert len(pricing)==len(pricing_cases) and all(r['status']=='failed' and r['attempts']==1 and not r['retry_reasons'] for r in pricing)
+        for _ in range(20):
+            if not any(manage('/overview')['routing']['active_sessions'].values()):break
+            time.sleep(.1)
+        else:raise AssertionError('pricing failures leaked session slots')
+        assert 'response.completed' in request('pricing_recovered') and COUNTS.get('pricing_recovered')==1
+        print('PASS pricing errors logged, session slots released, next normal request succeeds',flush=True)
         for key in ['', 'mock-client', 'invalid-management']:
             try:manage('/overview',key=key)
             except urllib.error.HTTPError as error:assert error.code in (401,403)

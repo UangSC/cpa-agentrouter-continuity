@@ -55,6 +55,9 @@ func incompleteError(raw []byte) *rpcError {
 }
 
 func classify(status int, raw []byte) string {
+	if pricingConfigError(status, raw) != nil {
+		return pricingErrorKind
+	}
 	var root map[string]any
 	_ = json.Unmarshal(raw, &root)
 	v := root
@@ -146,7 +149,7 @@ func (b *budget) retry(ctx context.Context, kind string, h http.Header) bool {
 	if kind == "" || b.used >= b.max || ctx.Err() != nil {
 		return false
 	}
-	if kind == "history" {
+	if kind == "history" || kind == pricingErrorKind {
 		return false
 	}
 	delay := retryDelay(kind, b.used, h)
