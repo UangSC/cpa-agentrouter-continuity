@@ -4,7 +4,6 @@ VALIDATION-*-local.md
 *.so
 *.dylib
 *.dll
-*.h
 __pycache__/
 *.pyc
 .runtime/
@@ -23,3 +22,20 @@ plugins/cpa-agentrouter-continuity-sessions.json.lock
 !.env.example
 release/
 *.zip
+
+# Local deployment data, tooling and editor state are never source artifacts.
+/config.yaml
+/config.yml
+/config.toml
+/auths/
+/backups/
+/plugins/
+/coverage/
+node_modules/
+.venv/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.tmp
+*.pending

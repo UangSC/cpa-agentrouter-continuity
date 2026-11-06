@@ -230,6 +230,7 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 					}
 				}
 				if t == "response.completed" || t == "response.incomplete" {
+					recordUsage(record, d)
 					outcome = strings.TrimPrefix(t, "response.")
 					reason = ""
 					completed = true

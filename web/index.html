@@ -1,9 +1,9 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentRouter Continuity</title><link rel="icon" type="image/png" href="/v0/resource/plugins/cpa-agentrouter-continuity/logo.png"><link rel="stylesheet" href="/v0/resource/plugins/cpa-agentrouter-continuity/style.css"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentRouter Continuity</title><link rel="icon" type="image/png" href="/v0/resource/plugins/cpa-agentrouter-continuity/logo.png"><link rel="stylesheet" href="/v0/resource/plugins/cpa-agentrouter-continuity/style.css"><link rel="stylesheet" href="/v0/resource/plugins/cpa-agentrouter-continuity/monitoring.css"></head>
 <body>
 <main class="shell">
- <header class="heading"><div class="brand"><img class="brand-mark" src="/v0/resource/plugins/cpa-agentrouter-continuity/logo.png" alt="AR Continuity"><div><h1>AgentRouter Continuity</h1><p>AgentRouter API 管理</p></div></div><div class="actions"><span id="connection" class="badge">未连接</span><span id="version" class="muted"></span><button id="refresh" hidden>刷新</button><button id="disconnect" class="quiet" hidden>断开连接</button></div></header>
+ <header class="heading"><div class="brand"><img class="brand-mark" src="/v0/resource/plugins/cpa-agentrouter-continuity/logo.png" alt="AR Continuity"><div><h1>AR Continuity</h1><p>AgentRouter 请求控制台</p></div></div><div class="actions"><span id="connection" class="badge">未连接</span><span id="version" class="muted"></span><button id="refresh" hidden>刷新</button><button id="disconnect" class="quiet" hidden>断开连接</button></div></header>
  <section id="login" class="login card" aria-labelledby="login-title">
   <span class="login-icon" aria-hidden="true">⌘</span><h2 id="login-title">连接 CPA</h2>
   <p>请输入 CPA 管理密钥。登录 CPA 管理面板时勾选「记住密码」，本页会自动使用该密钥。</p>
@@ -12,11 +12,66 @@
  </section>
  <div id="app" hidden>
   <div class="notice" id="notice" hidden role="status"></div>
-  <section class="metrics" aria-label="请求概览"><article class="card metric"><span>请求总数</span><strong id="metric-requests">0</strong><small>当前插件运行期间</small></article><article class="card metric"><span>进行中</span><strong id="metric-active">0</strong><small>等待 · 重试 · 输出中</small></article><article class="card metric"><span>自动恢复</span><strong id="metric-recovered">0</strong><small id="metric-retries">0 次额外重试</small></article><article class="card metric"><span>近期完成率</span><strong id="metric-rate">—</strong><small id="metric-failures">等待请求数据</small></article></section>
-  <div class="tabbar" role="tablist" aria-label="插件管理"><button role="tab" aria-selected="true" data-tab="credentials" aria-controls="credentials-panel">API Key 管理 <span id="key-count" class="count">0</span></button><button role="tab" aria-selected="false" data-tab="logs" aria-controls="logs-panel">请求日志</button><button role="tab" aria-selected="false" data-tab="health" aria-controls="health-panel">健康状态</button><span class="updated" id="updated">尚未刷新</span></div>
-  <section id="credentials-panel" role="tabpanel" class="card panel"><div class="panel-heading"><div><h2>AR API Key</h2><p>每个 Key 独立配置模型、前缀和重试策略。</p></div><button class="primary" id="add-key"><span aria-hidden="true" class="plus-icon">＋</span>新增 API Key</button></div><div class="table-wrap"><table><thead><tr><th>名称 / API Key</th><th>状态</th><th>模型</th><th>前缀</th><th>并发会话</th><th>重试策略</th><th class="right">操作</th></tr></thead><tbody id="credential-rows"></tbody></table></div><div id="credential-empty" class="empty" hidden><strong>还没有 AR API Key</strong><p>新增 Key 后，可在这里启用并配置模型。</p></div><div class="panel-footer">Key 仅在服务器凭证中保存，页面不会回显完整密钥。默认使用 Codex 请求头。</div></section>
-  <section id="logs-panel" role="tabpanel" class="card panel" hidden><div class="panel-heading"><div><h2>请求日志</h2><p>查看每次请求的结果、耗时和自动恢复情况。</p></div><input id="log-search" type="search" placeholder="搜索模型、凭证或状态" aria-label="搜索请求日志"></div><div class="table-wrap"><table><thead><tr><th>时间 / 请求</th><th>模型</th><th>API Key</th><th>状态</th><th>尝试次数</th><th>首段 / 总耗时</th><th>重试原因</th></tr></thead><tbody id="log-rows"></tbody></table></div><div id="log-empty" class="empty" hidden><strong>暂无请求记录</strong><p>通过 AR 插件发起请求后，日志会显示在这里。</p></div><div class="panel-footer">每 5 秒刷新 · 最近 200 条完成记录及进行中的请求 · 不记录对话正文、工具参数或完整密钥 · 重载后重新计数</div></section>
-  <section id="health-panel" role="tabpanel" hidden><div class="health-grid" id="health-cards"></div><article class="card policy"><h2>当前保护策略</h2><p id="routing-policy">仅接纳符合来源规则的会话；每个 API Key 可单独设置并发会话上限，默认 2 个。闲置窗口不占用名额。</p><div class="policy-grid"><div><strong>限流与早期断流</strong><p>在尚未交付内容时有限重试，遵循上游等待时间。</p></div><div><strong>已交付内容</strong><p>不自动重放已输出的文字或工具事件，避免重复执行。</p></div><div><strong>加密历史验证失败</strong><p>保留历史，提示新建会话，不清理 reasoning。</p></div><div><strong>检测范围</strong><p>手动检测仅访问模型列表。生成可用性以实际请求日志为准。</p></div></div></article></section>
+  <div class="tabbar" role="tablist" aria-label="插件管理">
+   <button id="dashboard-tab" role="tab" aria-selected="true" data-tab="dashboard" aria-controls="dashboard-panel">仪表盘</button>
+   <button id="credentials-tab" role="tab" aria-selected="false" tabindex="-1" data-tab="credentials" aria-controls="credentials-panel">API Key 管理 <span id="key-count" class="count">0</span></button>
+   <button id="logs-tab" role="tab" aria-selected="false" tabindex="-1" data-tab="logs" aria-controls="logs-panel">请求日志</button>
+   <button id="health-tab" role="tab" aria-selected="false" tabindex="-1" data-tab="health" aria-controls="health-panel">连接与策略</button>
+   <span class="updated" id="updated">尚未刷新</span>
+  </div>
+  <section id="dashboard-panel" role="tabpanel" aria-labelledby="dashboard-tab">
+   <div class="dashboard-heading"><div><h2>仪表盘</h2><p>AgentRouter 运行状态与请求统计</p></div><div class="dashboard-date"><span id="dashboard-date"></span><small>北京时间 · 每 5 秒更新</small></div></div>
+   <section class="card monitor-card" aria-labelledby="monitor-title">
+    <div class="section-head"><h3 id="monitor-title"><span class="section-icon" data-icon="activity"></span>监控状态</h3><span class="live-label" id="live-label"><i class="live-dot"></i>实时监控</span></div>
+    <div class="monitor-body"><div class="monitor-summary"><span class="monitor-status-icon" id="monitor-orb" aria-hidden="true"></span><div><strong id="monitor-label">等待请求</strong><p id="monitor-caption">等待连接数据</p></div></div><div class="signal-grid" id="signal-grid"></div></div>
+    <div id="monitor-keys" class="monitor-keys"></div>
+    <div class="monitor-footer"><span>最近 20 个时段 · 每格 10 分钟 · 按完成率渐变</span><div class="rate-scale"><span>低</span><i aria-hidden="true"></i><span>高</span><span class="scale-divider">灰色：无已结束请求</span><button class="text-button" data-open-tab="health">查看规则 →</button></div></div>
+   </section>
+   <div class="section-label"><h3>今日概况</h3><span id="data-scope">北京时间 00:00 至今 · 本次运行</span></div>
+   <div class="metrics dashboard-metrics">
+    <article class="card metric blue-metric"><div class="metric-label"><span class="metric-icon" data-icon="requests"></span>今日请求</div><strong id="metric-requests">—</strong><small id="metric-failures">等待请求数据</small><div class="sparkline" id="spark-requests"></div></article>
+    <article class="card metric green-metric"><div class="metric-label"><span class="metric-icon" data-icon="check"></span>请求完成率</div><strong id="metric-rate">—</strong><small>已结束请求 · 不含取消</small><div class="sparkline" id="spark-rate"></div></article>
+    <article class="card metric violet-metric"><div class="metric-label"><span class="metric-icon" data-icon="tokens"></span>Token 用量</div><strong id="metric-tokens">—</strong><small id="metric-token-note">输入 + 输出</small><div class="sparkline" id="spark-tokens"></div></article>
+    <article class="card metric amber-metric"><div class="metric-label"><span class="metric-icon" data-icon="recovery"></span>内部恢复</div><strong id="metric-recovered">—</strong><small id="metric-retries">0 次额外尝试</small><div class="sparkline" id="spark-recovered"></div></article>
+    <article class="card metric cyan-metric"><div class="metric-label"><span class="metric-icon" data-icon="speed"></span>请求速率</div><strong id="metric-rpm">—<em>RPM</em></strong><small>最近 30 分钟平均</small><div class="sparkline" id="spark-rpm"></div></article>
+    <article class="card metric rose-metric"><div class="metric-label"><span class="metric-icon" data-icon="clock"></span>平均首段延迟</div><strong id="metric-latency">—</strong><small>已记录首段的流式请求</small><div class="sparkline" id="spark-latency"></div></article>
+   </div>
+   <div class="chart-grid">
+    <section class="card chart-card traffic-card"><div class="section-head"><div><h3><span class="section-icon" data-icon="trend"></span>流量趋势</h3><p id="traffic-subtitle">请求分布与内部恢复走势</p></div><div class="segmented" aria-label="流量时间范围"><button data-range="1h" aria-pressed="false">近 1 小时</button><button data-range="6h" aria-pressed="false">近 6 小时</button><button data-range="today" aria-pressed="true">今日</button></div></div><div class="chart-toolbar"><div class="legend" id="traffic-legend"></div><select id="traffic-mode" aria-label="流量指标"><option value="requests">请求数</option><option value="tokens">Token 用量</option></select></div><div id="traffic-chart" class="traffic-chart"></div><div class="chart-foot"><span id="traffic-summary"></span><span>悬停或聚焦查看详情</span></div></section>
+    <section class="card chart-card distribution-card"><div class="section-head"><h3><span class="section-icon" data-icon="pie"></span>请求结果</h3><span class="small">今日</span></div><div id="result-donut" class="result-donut"></div><div class="distribution-legend" id="result-legend"></div><div class="distribution-foot"><span>正在处理</span><strong id="metric-active">0</strong><span>个请求</span></div></section>
+   </div>
+   <div class="detail-grid">
+    <section class="card chart-card timeline-card"><div class="section-head"><div><h3><span class="section-icon" data-icon="grid"></span>请求监控时间线</h3><p>今日 00:00–24:00 · 每格 10 分钟</p></div><span id="timeline-rate" class="pill good">等待数据</span></div><div class="timeline-top"><span>起始</span><span>+0 小时</span><span>+1 小时</span><span>+2 小时</span><span>+3 小时</span></div><div class="heatmap" id="request-heatmap"></div><div class="chart-foot timeline-foot"><div class="legend"><span><i class="heat-key green"></i>正常</span><span><i class="heat-key amber"></i>重试 / 未完整</span><span><i class="heat-key red"></i>失败</span><span><i class="heat-key neutral"></i>无请求</span><span><i class="heat-key future"></i>未到达</span></div></div><div class="timeline-insight" id="timeline-insight"></div></section>
+    <section class="card chart-card ranking-card"><div class="section-head"><div><h3><span class="section-icon" data-icon="rank"></span>模型成本排行</h3><p id="rank-caption">按今日请求量排序</p></div><button id="configure-prices" class="text-button">设置单价</button></div><div class="rank-toolbar"><div class="segmented" aria-label="模型排序"><button data-rank="requests" aria-pressed="true">请求量</button><button data-rank="tokens" aria-pressed="false">Token</button><button data-rank="cost" aria-pressed="false">估算费用</button></div><span id="rank-total"></span></div><div id="model-ranking" class="model-ranking"></div><div class="rank-note" id="rank-note">费用按自定义单价估算，不代表上游账单。</div></section>
+   </div>
+   <footer class="dashboard-footer"><span><i class="live-dot"></i>AR Continuity <span id="footer-version"></span></span><span id="retention-note">聚合保留 24 小时 · 重载后重新统计</span></footer>
+  </section>
+  <section id="credentials-panel" role="tabpanel" aria-labelledby="credentials-tab" class="card panel" hidden><div class="panel-heading"><div><h2>AR API Key</h2><p>每个 Key 独立配置模型、前缀和重试策略。</p></div><button class="primary" id="add-key"><span aria-hidden="true" class="plus-icon">＋</span>新增 API Key</button></div><div class="table-wrap"><table><thead><tr><th>名称 / API Key</th><th>状态</th><th>模型</th><th>前缀</th><th>并发会话</th><th>重试策略</th><th class="right">操作</th></tr></thead><tbody id="credential-rows"></tbody></table></div><div id="credential-empty" class="empty" hidden><strong>还没有 AR API Key</strong><p>新增 Key 后，可在这里启用并配置模型。</p></div><div class="panel-footer">Key 仅在服务器凭证中保存，页面不会回显完整密钥。默认使用 Codex 请求头。</div></section>
+  <section id="logs-panel" role="tabpanel" aria-labelledby="logs-tab" hidden>
+   <div class="dashboard-heading page-heading"><div><h2>请求日志</h2><p>请求结果、响应耗时与内部恢复记录</p></div><span class="page-meta">北京时间 · 每 5 秒更新</span></div>
+   <div class="page-summary" id="log-summary"></div>
+   <section class="card log-card"><div class="log-toolbar"><label class="search-control"><span data-icon="search"></span><input id="log-search" type="search" placeholder="搜索模型、请求 ID 或错误码" aria-label="搜索请求日志"></label><div class="filter-controls"><select id="log-status" aria-label="筛选请求状态"><option value="all">全部状态</option><option value="active">进行中</option><option value="completed">已完成</option><option value="recovered">重试后完成</option><option value="failed">失败</option><option value="incomplete">输出未完整</option><option value="canceled">已取消</option></select><select id="log-key" aria-label="筛选 API Key"><option value="all">全部 API Key</option></select><button id="reset-log-filters" class="quiet">重置筛选</button></div></div>
+   <div class="log-result-line"><span id="log-result-count"></span><span>点击「详情」查看请求记录</span></div>
+   <div class="table-wrap"><table class="request-table"><thead><tr><th>请求时间 / ID</th><th>模型 / API Key</th><th>请求状态</th><th>上游尝试</th><th>首段延迟</th><th>总耗时</th><th class="right">操作</th></tr></thead><tbody id="log-rows"></tbody></table></div><div id="log-empty" class="visual-empty" hidden><span data-icon="search"></span><strong>暂无请求记录</strong><p>通过 AR 插件发起请求后，日志会显示在这里。</p></div>
+   <div class="pagination"><span>保留最近 200 条结束记录及进行中的请求</span><div><label>每页 <select id="log-page-size" aria-label="每页记录数"><option value="20">20</option><option value="50">50</option><option value="100">100</option></select> 条</label><button id="log-prev" aria-label="上一页">‹</button><span id="log-page-label"></span><button id="log-next" aria-label="下一页">›</button></div></div></section>
+   <div class="page-footnote">仅记录请求元数据；不保留对话正文、工具参数或完整密钥。插件重载后重新记录。</div>
+  </section>
+  <section id="health-panel" role="tabpanel" aria-labelledby="health-tab" hidden>
+   <div class="dashboard-heading page-heading"><div><h2>连接与策略</h2><p>API Key 连接检测、近期请求表现与恢复策略</p></div><span class="page-meta">AgentRouter · HTTP / SSE</span></div>
+   <div class="page-summary" id="health-summary"></div>
+   <div class="section-label"><h3>API Key 连接状态</h3><span>连接检测仅访问模型列表，不发送生成请求</span></div>
+   <div class="connection-grid" id="health-cards"></div>
+   <div class="section-label"><h3>当前配置</h3><span>每个 API Key 独立生效</span></div>
+   <section class="card config-table-card"><div class="table-wrap"><table class="config-table"><thead><tr><th>API Key</th><th>活跃会话 / 上限</th><th>额外重试</th><th>等待预算</th><th>模型前缀</th><th class="right">操作</th></tr></thead><tbody id="policy-rows"></tbody></table></div><div id="policy-empty" class="visual-empty" hidden><strong>暂无配置</strong><p>添加 API Key 后显示当前策略。</p></div></section>
+   <div class="section-label"><h3>请求保护规则</h3><span>由插件自动执行</span></div>
+   <div class="protection-grid">
+    <article class="card protection-card"><span class="protection-icon" data-icon="shield"></span><div><h3>会话来源与并发</h3><p>仅接纳来源符合规则的 AR 会话；闲置窗口不占用名额，同一会话的多个请求共用名额。</p><span class="policy-tag">按 Key 限制并发</span></div></article>
+    <article class="card protection-card"><span class="protection-icon" data-icon="recovery"></span><div><h3>限流与早期断流</h3><p>首次内容交付前，在 Key 的次数与等待预算内重试；成功后在原连接返回结果。</p><span class="policy-tag">遵循上游等待时间</span></div></article>
+    <article class="card protection-card"><span class="protection-icon" data-icon="lock"></span><div><h3>加密历史验证失败</h3><p>保留原始历史、Key 和模型，最多额外重试 2 次，仍计入当前 Key 的总次数与等待预算。</p><span class="policy-tag">不清理或改写历史</span></div></article>
+    <article class="card protection-card"><span class="protection-icon" data-icon="stop"></span><div><h3>终止与重放边界</h3><p>已交付文字、推理或工具事件后不自动重放；认证、配额、内容过滤及计费配置错误立即终止。</p><span class="policy-tag">避免重复执行</span></div></article>
+   </div>
+   <section class="card status-rules"><div class="section-head"><h3><span class="section-icon" data-icon="activity"></span>监控颜色规则</h3><div class="rate-scale"><span>0%</span><i aria-hidden="true"></i><span>100%</span></div></div><p>状态条按时间段的完成率连续渐变：全部异常为红色，完成与异常各半为黄色，全部完成为绿色。无已结束请求显示灰色。</p><div class="rule-details"><span><strong>统计范围</strong>最近 20 个 10 分钟时间段</span><span><strong>完成率</strong>完成 ÷（完成 + 失败 + 未完整）</span><span><strong>内部恢复</strong>重试后完成仍计为完成</span><span><strong>排除项</strong>进行中和取消不计入完成率</span></div><small>状态文字分级：完成率 ≥90% 为正常，50%–90% 为需关注，低于 50% 为异常。连接检测结果单独展示，不代表生成可用性。</small></section>
+  </section>
  </div>
 </main>
 <dialog id="editor" aria-labelledby="editor-title">
@@ -63,5 +118,11 @@
  <div id="model-options" class="model-options" role="group" aria-label="可选模型"></div>
  <div class="picker-footer"><span>只填入表单，点击「保存配置」后生效。</span><div><button type="button" id="cancel-model-picker">取消</button><button type="button" class="primary" id="apply-model-picker">确认选择</button></div></div>
 </dialog>
+<dialog id="request-detail" aria-labelledby="request-detail-title"><div class="detail-dialog-heading"><div><h2 id="request-detail-title">请求详情</h2><p id="detail-request-id"></p></div><button id="close-request-detail" class="icon-button" aria-label="关闭请求详情">×</button></div><div id="request-detail-body" class="request-detail-body"></div><div class="detail-dialog-footer"><span>请求元数据 · 不包含对话正文</span><button id="dismiss-request-detail">关闭</button></div></dialog>
+<dialog id="price-editor" aria-labelledby="price-title"><form id="price-form"><div class="picker-heading"><div><h2 id="price-title">模型单价</h2><p>美元 / 百万 Token · 仅用于本页估算</p></div><button type="button" class="icon-button" id="close-prices" aria-label="关闭单价设置">×</button></div><div class="price-content"><p class="price-explanation">普通输入不含缓存命中；输出已包含推理 Token。空白表示未配置，0 表示免费。缓存价未公布时，默认按普通输入价估算。单价只保存在当前浏览器，不修改上游计费。</p><div class="price-toolbar"><button type="button" id="fetch-prices">获取渠道定价</button><span>AgentRouter · 默认分组 · USD</span></div><p id="price-status" class="price-status" role="status"></p><div id="price-fields"></div><p id="price-error" class="error" role="alert"></p></div><div class="picker-footer"><button type="button" id="cancel-prices">取消</button><button class="primary" type="submit">保存单价</button></div></form></dialog>
+<div id="chart-tooltip" class="chart-tooltip" role="tooltip" hidden></div>
 <script src="/v0/resource/plugins/cpa-agentrouter-continuity/app.js" defer></script>
+<script src="/v0/resource/plugins/cpa-agentrouter-continuity/dashboard.js" defer></script>
+<script src="/v0/resource/plugins/cpa-agentrouter-continuity/monitoring.js" defer></script>
+<script src="/v0/resource/plugins/cpa-agentrouter-continuity/pricing.js" defer></script>
 </body></html>

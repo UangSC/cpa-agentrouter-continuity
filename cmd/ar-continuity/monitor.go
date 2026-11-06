@@ -9,16 +9,17 @@ import (
 )
 
 type requestRecord struct {
-	ID            string    `json:"id"`
-	CredentialID  string    `json:"credential_id"`
-	Model         string    `json:"model"`
-	StartedAt     time.Time `json:"started_at"`
-	DurationMS    int64     `json:"duration_ms"`
-	FirstOutputMS int64     `json:"first_output_ms"`
-	Status        string    `json:"status"`
-	ErrorCode     string    `json:"error_code,omitempty"`
-	Attempts      int       `json:"attempts"`
-	RetryReasons  []string  `json:"retry_reasons"`
+	ID            string      `json:"id"`
+	CredentialID  string      `json:"credential_id"`
+	Model         string      `json:"model"`
+	StartedAt     time.Time   `json:"started_at"`
+	DurationMS    int64       `json:"duration_ms"`
+	FirstOutputMS int64       `json:"first_output_ms"`
+	Status        string      `json:"status"`
+	ErrorCode     string      `json:"error_code,omitempty"`
+	Attempts      int         `json:"attempts"`
+	RetryReasons  []string    `json:"retry_reasons"`
+	Usage         *tokenUsage `json:"-"`
 }
 type monitorState struct {
 	mu       sync.Mutex
@@ -35,6 +36,7 @@ func beginRecord(ctx context.Context, q execution, c credential) (context.Contex
 	r := &requestRecord{ID: fmt.Sprint(monitor.sequence.Add(1)), CredentialID: c.ID, Model: q.Model, StartedAt: time.Now().UTC(), Status: "waiting", FirstOutputMS: -1, RetryReasons: []string{}}
 	monitor.mu.Lock()
 	monitor.Active[r.ID] = r
+	analyticsBucketFor(r).Requests++
 	monitor.mu.Unlock()
 	return context.WithValue(ctx, recordContextKey{}, r), r
 }
@@ -68,6 +70,7 @@ func finishRecord(r *requestRecord, status, code string) {
 	r.Status = status
 	r.ErrorCode = code
 	r.DurationMS = time.Since(r.StartedAt).Milliseconds()
+	finishAnalytics(r)
 	delete(monitor.Active, r.ID)
 	monitor.Recent = append(monitor.Recent, *r)
 	if len(monitor.Recent) > 200 {
@@ -88,5 +91,5 @@ func monitorSnapshot() map[string]any {
 	for i := range recent {
 		recent[i].RetryReasons = append([]string{}, recent[i].RetryReasons...)
 	}
-	return map[string]any{"active": running, "recent": recent, "retention": 200}
+	return map[string]any{"active": running, "recent": recent, "retention": 200, "analytics": analyticsSnapshot(time.Now().UTC())}
 }

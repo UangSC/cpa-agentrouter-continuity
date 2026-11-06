@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/rand"
-	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -13,10 +12,8 @@ import (
 	"time"
 
 	"github.com/UangSC/cpa-agentrouter-continuity/internal/sdk"
+	webui "github.com/UangSC/cpa-agentrouter-continuity/web"
 )
-
-//go:embed web/*
-var webAssets embed.FS
 
 const apiPrefix = "/v0/management/plugins/cpa-agentrouter-continuity"
 const resourcePrefix = "/v0/resource/plugins/cpa-agentrouter-continuity"
@@ -55,10 +52,10 @@ var credentialWriteMu sync.Mutex
 
 func managementRegistration() any {
 	routes := []map[string]string{}
-	for _, item := range [][2]string{{"GET", "/overview"}, {"GET", "/credentials"}, {"POST", "/credentials"}, {"PUT", "/credentials"}, {"POST", "/health"}, {"POST", "/models"}} {
+	for _, item := range [][2]string{{"GET", "/overview"}, {"GET", "/credentials"}, {"POST", "/credentials"}, {"PUT", "/credentials"}, {"POST", "/health"}, {"POST", "/models"}, {"GET", "/pricing"}} {
 		routes = append(routes, map[string]string{"method": item[0], "path": apiPrefix + item[1]})
 	}
-	return map[string]any{"routes": routes, "resources": []map[string]string{{"path": "/ui", "menu": "AR Continuity", "description": "AR API Key、请求日志与健康状态"}, {"path": "/status"}, {"path": "/app.js"}, {"path": "/style.css"}, {"path": "/logo.png"}}}
+	return map[string]any{"routes": routes, "resources": []map[string]string{{"path": "/ui", "menu": "AR Continuity", "description": "AR API Key、请求日志与健康状态"}, {"path": "/status"}, {"path": "/app.js"}, {"path": "/dashboard.js"}, {"path": "/monitoring.js"}, {"path": "/pricing.js"}, {"path": "/monitoring.css"}, {"path": "/style.css"}, {"path": "/logo.png"}}}
 }
 func jsonResponse(status int, value any) sdk.ManagementResponse {
 	body, _ := json.Marshal(value)
@@ -75,16 +72,16 @@ func managementHandle(raw []byte) (any, error) {
 		switch asset {
 		case "ui", "status":
 			asset = "index.html"
-		case "app.js":
+		case "app.js", "dashboard.js", "monitoring.js", "pricing.js":
 			mime = "text/javascript; charset=utf-8"
-		case "style.css":
+		case "style.css", "monitoring.css":
 			mime = "text/css; charset=utf-8"
 		case "logo.png":
 			mime = "image/png"
 		default:
 			return jsonResponse(404, map[string]string{"error": "页面不存在"}), nil
 		}
-		body, e := webAssets.ReadFile("web/" + asset)
+		body, e := webui.ReadFile(asset)
 		if e != nil {
 			return nil, e
 		}
@@ -151,6 +148,8 @@ func managementHandle(raw []byte) (any, error) {
 		return saveManagedCredential(q), nil
 	case "POST /models":
 		return fetchModels(q), nil
+	case "GET /pricing":
+		return fetchChannelPricing(q), nil
 	case "POST /health":
 		return checkHealth(q), nil
 	}

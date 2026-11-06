@@ -117,6 +117,7 @@ func runJSON(ctx context.Context, q execution, c credential, body []byte) ([]byt
 			}
 			outcome = "completed"
 			reason = ""
+			recordUsage(record, raw)
 			if q.toolNamespaceAliased {
 				raw, _ = rewriteToolNames(raw, collaborationAlias, "collaboration")
 			}

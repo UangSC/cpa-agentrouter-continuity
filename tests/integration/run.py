@@ -20,6 +20,10 @@ def port():
 class Upstream(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args): pass
     def do_GET(self):
+        if self.path=='/api/pricing':
+            assert not self.headers.get('Authorization') and not self.headers.get('Cookie')
+            payload={'success':True,'group_ratio':{'default':1},'data':[{'model_name':'ar-mock-model','quota_type':0,'model_ratio':2,'completion_ratio':5,'enable_groups':['default']}]}
+            self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps(payload).encode());return
         assert self.path=='/v1/models'
         assert self.headers.get('Authorization')=='Bearer mock-secret'
         self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(b'{"data":[{"id":"ar-mock-model"}]}')
@@ -65,7 +69,7 @@ class Upstream(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(terminal).encode());return
         if scenario=='history_json_recover' and not data.get('stream'):
             self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers()
-            self.wfile.write(json.dumps({'id':'resp_mock','object':'response','status':'completed','model':data['model'],'output':[]}).encode());return
+            self.wfile.write(json.dumps({'id':'resp_mock','object':'response','status':'completed','model':data['model'],'output':[],'usage':{'input_tokens':25,'output_tokens':4,'input_tokens_details':{'cached_tokens':20}}}).encode());return
         self.send_response(200);self.send_header('Content-Type','text/event-stream');self.end_headers()
         def event(value):
             raw=('data: '+json.dumps(value)+'\n\n').encode()
@@ -136,7 +140,7 @@ if __name__ == '__main__':
     parser.add_argument('--hold-ui',action='store_true',help='完成测试后保留界面供人工检查')
     parser.add_argument('--expected-version',help='预期插件版本，默认读取当前源码')
     args=parser.parse_args()
-    expected_version=args.expected_version or re.search(r'const version = "([^"]+)"', (pathlib.Path(__file__).resolve().parents[1]/'plugin.go').read_text(encoding='utf-8'))[1]
+    expected_version=args.expected_version or re.search(r'const version = "([^"]+)"', (pathlib.Path(__file__).resolve().parents[2]/'cmd/ar-continuity/plugin.go').read_text(encoding='utf-8'))[1]
     ROOT=pathlib.Path(tempfile.mkdtemp(prefix='cpa-agentrouter-continuity-test-',dir=args.work_parent))
     print('TEST_WORKSPACE',str(ROOT),flush=True)
     plugins=ROOT/'plugins/linux/amd64';plugins.mkdir(parents=True)
@@ -237,6 +241,14 @@ if __name__ == '__main__':
                     events=[json.loads(line[5:]) for line in response.splitlines() if line.startswith('data:') and line[5:].strip()!='[DONE]']
                     assert not any(e.get('type')=='error' for e in events)
             print('PASS',scenario,'one client request, internal attempts',attempts,'history preserved',flush=True)
+        analytics=manage('/overview')['logs']['analytics']
+        assert analytics['bucket_minutes']==5
+        buckets=analytics['buckets']
+        assert sum(b['usage_count'] for b in buckets)>=5
+        assert sum(b['tokens']['cached_tokens'] for b in buckets)==20
+        assert sum(b['tokens']['input_tokens'] for b in buckets)>=65
+        assert sum(b['recovered'] for b in buckets)>=3
+        print('PASS dashboard numeric usage from SSE and JSON, cached input, and internal recovery aggregates',flush=True)
         for scenario,stream in [('content_filter_before',True),('content_filter_after',True),('content_filter_json',False)]:
             try:response=request(scenario,stream)
             except urllib.error.HTTPError as error:
@@ -313,6 +325,18 @@ if __name__ == '__main__':
             except urllib.error.HTTPError as error:assert error.code in (401,403)
             else:raise AssertionError('management API accepted wrong key')
         print('PASS management-auth-required',flush=True)
+        # Keep combined failures below the host's per-IP management-key ban threshold.
+        for key in ['invalid-management']:
+            try:manage('/pricing',key=key)
+            except urllib.error.HTTPError as error:assert error.code in (401,403)
+            else:raise AssertionError('pricing API accepted wrong key')
+        channel=manage('/pricing')
+        assert channel['currency']=='USD' and channel['unit']=='million_tokens' and channel['group']=='default'
+        assert channel['prices']['ar-mock-model']=={'input':4,'cached':4,'output':20,'cache_assumed':True}
+        assert manage('/overview')['logs']['analytics']['credential_scoped'] is True
+        for asset in ['monitoring.js','monitoring.css','pricing.js']:
+            assert get('/v0/resource/plugins/cpa-agentrouter-continuity/'+asset)==(pathlib.Path(__file__).resolve().parents[2]/'web'/asset).read_bytes()
+        print('PASS channel-pricing auth, public-fetch without credentials, conversion, scoped aggregates and embedded assets',flush=True)
         catalog=manage('/credentials');assert len(catalog['credentials'])==1
         item=catalog['credentials'][0];assert 'mock-secret' not in json.dumps(catalog)
         catalog=manage('/models',{'auth_index':item['auth_index']},'POST')

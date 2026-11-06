@@ -3,7 +3,7 @@ const assert=require('node:assert/strict');
 const vm=require('node:vm');
 const fs=require('node:fs');
 const path=require('node:path');
-const code=fs.readFileSync(path.join(__dirname,'../web/app.js'),'utf8');
+const code=fs.readFileSync(path.join(__dirname,'../../web/app.js'),'utf8');
 function runtime(){const store=new Map();const ctx=vm.createContext({TextEncoder,TextDecoder,Uint8Array,atob,console,localStorage:{getItem:k=>store.get(k)??null,setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)},location:{host:'localhost:123'},navigator:{userAgent:'test-agent'}});vm.runInContext(code,ctx);return {ctx,store,run:s=>vm.runInContext(s,ctx)}}
 test('HTML output escapes credential labels and upstream strings',()=>{const {run}=runtime();assert.equal(run('esc(`<img src=x onerror="x"> & \'quote\'`)'),'&lt;img src=x onerror=&quot;x&quot;&gt; &amp; &#39;quote&#39;')});
 test('model editor preserves non-edited model metadata and maps aliases',()=>{const {run}=runtime();const value=JSON.parse(run('JSON.stringify(parseModels("public = upstream\\nsecond",[{ID:"public",ContextLength:100000,Thinking:{Levels:["high"]}}]))'));assert.equal(value[0].Name,'upstream');assert.equal(value[0].ContextLength,100000);assert.deepEqual(value[0].Thinking.Levels,['high']);assert.equal(value[1].Name,'second')});

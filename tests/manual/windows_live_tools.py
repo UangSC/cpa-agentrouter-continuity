@@ -17,7 +17,7 @@ parser.add_argument('--expected-version', help='预期插件版本，默认读�
 args = parser.parse_args()
 expected_version = args.expected_version or re.search(
     r'const version = "([^"]+)"',
-    (pathlib.Path(__file__).resolve().parents[1] / 'plugin.go').read_text(encoding='utf-8'))[1]
+    (pathlib.Path(__file__).resolve().parents[2] / 'cmd/ar-continuity/plugin.go').read_text(encoding='utf-8'))[1]
 cfg = yaml.safe_load((args.core_root / 'config.yaml').read_text(encoding='utf-8'))
 app = tomllib.loads((args.core_root.parent / 'config.toml').read_text(encoding='utf-8'))
 base = 'http://127.0.0.1:' + str(cfg['server']['port'])
