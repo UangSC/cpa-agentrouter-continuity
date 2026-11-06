@@ -9,18 +9,16 @@ import (
 )
 
 type requestRecord struct {
-	ID                    string    `json:"id"`
-	CredentialID          string    `json:"credential_id"`
-	Model                 string    `json:"model"`
-	StartedAt             time.Time `json:"started_at"`
-	DurationMS            int64     `json:"duration_ms"`
-	FirstOutputMS         int64     `json:"first_output_ms"`
-	Status                string    `json:"status"`
-	ErrorCode             string    `json:"error_code,omitempty"`
-	Attempts              int       `json:"attempts"`
-	RetryReasons          []string  `json:"retry_reasons"`
-	ActiveSessions        int       `json:"active_sessions"`
-	MaxConcurrentSessions int       `json:"max_concurrent_sessions"`
+	ID            string    `json:"id"`
+	CredentialID  string    `json:"credential_id"`
+	Model         string    `json:"model"`
+	StartedAt     time.Time `json:"started_at"`
+	DurationMS    int64     `json:"duration_ms"`
+	FirstOutputMS int64     `json:"first_output_ms"`
+	Status        string    `json:"status"`
+	ErrorCode     string    `json:"error_code,omitempty"`
+	Attempts      int       `json:"attempts"`
+	RetryReasons  []string  `json:"retry_reasons"`
 }
 type monitorState struct {
 	mu       sync.Mutex
@@ -35,12 +33,6 @@ type recordContextKey struct{}
 
 func beginRecord(ctx context.Context, q execution, c credential) (context.Context, *requestRecord) {
 	r := &requestRecord{ID: fmt.Sprint(monitor.sequence.Add(1)), CredentialID: c.ID, Model: q.Model, StartedAt: time.Now().UTC(), Status: "waiting", FirstOutputMS: -1, RetryReasons: []string{}}
-	r.MaxConcurrentSessions = sessionLimit(c)
-	r.ActiveSessions = -1
-	_ = withRoutingLedger(func(s *routingLedger) error {
-		r.ActiveSessions = len(keySessions(s, digest(c.APIKey)))
-		return nil
-	})
 	monitor.mu.Lock()
 	monitor.Active[r.ID] = r
 	monitor.mu.Unlock()

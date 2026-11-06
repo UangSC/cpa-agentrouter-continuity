@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -142,25 +141,5 @@ func TestManagementSessionLimitSaveAndOmittedPreservation(t *testing.T) {
 		if result := save(); result.StatusCode != 400 || m.saves != before {
 			t.Fatal("invalid limit was saved")
 		}
-	}
-}
-
-func TestRequestLogRecordsConcurrencyAtStart(t *testing.T) {
-	routeFixture(t)
-	limit := 3
-	c := testCredential()
-	c.MaxConcurrentSessions = &limit
-	ar := arCandidate("ar", c.APIKey, 10)
-	ar.Attributes["ar_max_concurrent_sessions"] = "3"
-	routeRequest("one", "one", true, ar)
-	_, q := routeRequest("two", "two", true, ar)
-	_, record := beginRecord(context.Background(), q, c)
-	defer finishRecord(record, "completed", "")
-	if record.ActiveSessions != 2 || record.MaxConcurrentSessions != 3 {
-		t.Fatalf("wrong concurrency snapshot: %+v", record)
-	}
-	completeAdmission(sdk.RequestCompletion{RequestID: "one"})
-	if record.ActiveSessions != 2 {
-		t.Fatal("historical snapshot changed when another request completed")
 	}
 }

@@ -336,9 +336,6 @@ if __name__ == '__main__':
         RELEASE.set()
         for worker in threads:worker.join(10)
         assert len(outputs)==3 and all('response.completed' in x for x in outputs)
-        rows=manage('/overview')['logs']['recent']
-        custom=[r for r in rows if r.get('max_concurrent_sessions')==3]
-        assert len(custom)==3 and all(1<=r['active_sessions']<=3 for r in custom)
         config_edit.pop('max_concurrent_sessions')
         manage('/credentials',config_edit,'PUT')
         assert json.loads((auth/'ar-mock.json').read_text())['max_concurrent_sessions']==1
@@ -353,7 +350,7 @@ if __name__ == '__main__':
         credential=json.loads((auth/'ar-mock.json').read_text())
         credential['max_concurrent_sessions']=2
         (auth/'ar-mock.json').write_text(json.dumps(credential));time.sleep(1)
-        print('PASS configured limits 1/3, shared counts, live reduction, legacy edits, validation, concurrency logs',flush=True)
+        print('PASS configured limits 1/3, shared counts, live reduction, legacy edits, validation',flush=True)
         # State survives a configuration reload, without altering the other provider's routing.
         cfg['plugins']['configs']['cpa-agentrouter-continuity']['priority']=2;config.write_text(yaml.safe_dump(cfg));time.sleep(1)
         assert 'OTHER' in mixed('foreign-session','foreign-after-reload')
