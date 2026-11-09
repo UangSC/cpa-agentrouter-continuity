@@ -46,6 +46,20 @@ func stableSession(headers http.Header, body []byte, meta map[string]any) (strin
 	}
 	var root map[string]any
 	_ = json.Unmarshal(body, &root)
+	// DSH's generic Responses SDK carries the conversation ID in these two
+	// fields. X-Client-Request-Id is only a request ID for other clients, so do
+	// not treat it as a conversation identity outside this adapter contract.
+	if raw == "" && strings.HasPrefix(strings.ToLower(strings.TrimSpace(headers.Get("User-Agent"))), "deepseek-harness/") {
+		requestSession := strings.TrimSpace(headers.Get("X-Client-Request-Id"))
+		cacheSession := stringMeta(root, "prompt_cache_key")
+		if requestSession != "" && cacheSession != "" && requestSession != cacheSession {
+			return "", ""
+		}
+		raw = requestSession
+		if raw == "" {
+			raw = cacheSession
+		}
+	}
 	if raw == "" {
 		for _, name := range []string{"session_id", "thread_id"} {
 			if s := stringMeta(root, name); s != "" {
@@ -262,6 +276,44 @@ func chooseWeighted(candidates []sdk.SchedulerAuthCandidate) sdk.SchedulerAuthCa
 	}
 	return filtered[0]
 }
+
+// Keep provider priority/weight selection, then balance AR admissions by real
+// Key rather than credential rows. Continuations never change the cursor.
+func chooseAdmission(s *routingLedger, candidates []sdk.SchedulerAuthCandidate) sdk.SchedulerAuthCandidate {
+	chosen := chooseWeighted(candidates)
+	if chosen.Provider != pluginID {
+		return chosen
+	}
+	groups := map[string][]sdk.SchedulerAuthCandidate{}
+	for _, candidate := range candidates {
+		if candidate.Provider == pluginID && candidate.Priority == chosen.Priority {
+			key := keyForCandidate(candidate)
+			groups[key] = append(groups[key], candidate)
+		}
+	}
+	keys := []string{}
+	minimum := int(^uint(0) >> 1)
+	for key := range groups {
+		count := len(keySessions(s, key))
+		if count < minimum {
+			minimum = count
+			keys = keys[:0]
+		}
+		if count == minimum {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	key := keys[0]
+	for _, candidate := range keys {
+		if candidate > s.LastKeyHash {
+			key = candidate
+			break
+		}
+	}
+	return chooseWeighted(groups[key])
+}
+
 func rejectAdmission(reason string) sdk.SchedulerPickResponse {
 	return sdk.SchedulerPickResponse{Handled: true, Reject: true, RejectCode: "ar_session_ineligible", RejectReason: reason}
 }
@@ -273,16 +325,24 @@ func pickAdmission(q sdk.SchedulerPickRequest) sdk.SchedulerPickResponse {
 		}
 	}
 	if !hasAR {
+		pinned := false
 		id := http.Header(q.Options.Headers).Get(admissionHeader)
 		if value, ok := admissionRequests.Load(id); ok {
 			r := value.(admissionRequest)
 			if r.Session != "" {
 				_ = withRoutingLedger(func(s *routingLedger) error {
+					if origin, known := s.Origins[r.Session]; known && !origin.Foreign && origin.Provider == pluginID {
+						pinned = true
+						return nil
+					}
 					s.Origins[r.Session] = sessionOrigin{Provider: "external", Foreign: true}
 					delete(s.Leases, id)
 					return nil
 				})
 			}
+		}
+		if pinned {
+			return rejectAdmission("The AR Key bound to this conversation is not available for this model. This conversation cannot switch Keys or providers.")
 		}
 		return sdk.SchedulerPickResponse{}
 	}
@@ -296,7 +356,8 @@ func pickAdmission(q sdk.SchedulerPickRequest) sdk.SchedulerPickResponse {
 	result := rejectAdmission("AR requires a new identified conversation and a free session slot")
 	e := withRoutingLedger(func(s *routingLedger) error {
 		origin, known := s.Origins[r.Session]
-		if provider != "" && provider != pluginID && r.Session != "" {
+		pinnedAR := known && !origin.Foreign && origin.Provider == pluginID
+		if provider != "" && provider != pluginID && r.Session != "" && !pinnedAR {
 			origin = sessionOrigin{Provider: provider, AuthID: preferred, Foreign: true}
 			s.Origins[r.Session] = origin
 			known = true
@@ -308,6 +369,9 @@ func pickAdmission(q sdk.SchedulerPickRequest) sdk.SchedulerPickResponse {
 		eligible := ok && r.ID != "" && r.Session != "" && ((known && !origin.Foreign && origin.Provider == pluginID) || (!known && r.Fresh) || (known && origin.Foreign && r.Fresh && r.ExplicitFresh))
 		allowed := []sdk.SchedulerAuthCandidate{}
 		for _, candidate := range q.Candidates {
+			if pinnedAR && candidate.Provider != pluginID {
+				continue
+			}
 			if candidate.Provider == pluginID {
 				if !eligible || !availableSession(s, keyForCandidate(candidate), r.Session, limitForCandidate(candidate)) {
 					continue
@@ -315,10 +379,16 @@ func pickAdmission(q sdk.SchedulerPickRequest) sdk.SchedulerPickResponse {
 				if known && origin.KeyHash != "" && origin.KeyHash != keyForCandidate(candidate) {
 					continue
 				}
+				if pinnedAR && origin.KeyHash == "" && candidate.ID != origin.AuthID {
+					continue
+				}
 			}
 			allowed = append(allowed, candidate)
 		}
 		if len(allowed) == 0 {
+			if pinnedAR {
+				result = rejectAdmission("The AR Key bound to this conversation is unavailable or its session slots are full. Retry later; this conversation cannot switch Keys or providers.")
+			}
 			return nil
 		}
 		var chosen sdk.SchedulerAuthCandidate
@@ -334,12 +404,16 @@ func pickAdmission(q sdk.SchedulerPickRequest) sdk.SchedulerPickResponse {
 			}
 		}
 		if chosen.ID == "" {
-			chosen = chooseWeighted(allowed)
+			chosen = chooseAdmission(s, allowed)
 		}
 		if r.Session != "" {
 			if chosen.Provider == pluginID {
 				if !known || (origin.Foreign && r.ExplicitFresh) {
 					s.Origins[r.Session] = sessionOrigin{Provider: pluginID, AuthID: chosen.ID, KeyHash: keyForCandidate(chosen)}
+					s.LastKeyHash = keyForCandidate(chosen)
+				} else if pinnedAR && origin.KeyHash == "" {
+					origin.KeyHash = keyForCandidate(chosen)
+					s.Origins[r.Session] = origin
 				}
 				s.Leases[id] = admissionLease{Session: r.Session, KeyHash: keyForCandidate(chosen), AuthID: chosen.ID, RequestID: id, Created: time.Now().UTC()}
 			} else {

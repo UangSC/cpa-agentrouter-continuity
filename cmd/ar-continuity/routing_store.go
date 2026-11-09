@@ -25,9 +25,10 @@ type admissionLease struct {
 	Running   bool      `json:"running"`
 }
 type routingLedger struct {
-	Process string                    `json:"process"`
-	Origins map[string]sessionOrigin  `json:"origins"`
-	Leases  map[string]admissionLease `json:"leases"`
+	Process     string                    `json:"process"`
+	Origins     map[string]sessionOrigin  `json:"origins"`
+	Leases      map[string]admissionLease `json:"leases"`
+	LastKeyHash string                    `json:"last_key_hash,omitempty"`
 }
 
 var routingPath = filepath.Join("plugins", "cpa-agentrouter-continuity-sessions.json")

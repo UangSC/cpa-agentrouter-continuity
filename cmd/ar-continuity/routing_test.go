@@ -76,6 +76,84 @@ func TestNewConversationAdmittedAndContinuationKeepsOrigin(t *testing.T) {
 		t.Fatal("AR continuation denied", picked)
 	}
 }
+
+func TestHarnessResponsesSessionIdentity(t *testing.T) {
+	const session = "session-cfc252cf-ab7a-401e-ac5f-a13434c2a4f6"
+	const userAgent = "deepseek-harness/0.2.2-rc.1 (+https://github.com/deepseek-ai/deepseek-harness)"
+	for _, test := range []struct {
+		name, agent, requestID, cacheKey, explicit, want string
+	}{
+		{"both SDK fields", userAgent, session, session, "", session},
+		{"header only", userAgent, session, "", "", session},
+		{"body only", userAgent, "", session, "", session},
+		{"conflicting SDK fields", userAgent, session, "different-session", "", ""},
+		{"ordinary request ID", "generic-client", session, "", "", ""},
+		{"ordinary cache partition", "generic-client", "", session, "", ""},
+		{"explicit session wins", userAgent, "request", "cache", session, session},
+		{"invalid session", userAgent, "", "invalid\nidentity", "", ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			headers := http.Header{}
+			headers.Set("User-Agent", test.agent)
+			headers.Set("X-Client-Request-Id", test.requestID)
+			headers.Set("Session-Id", test.explicit)
+			body, _ := json.Marshal(map[string]any{"input": "hello", "prompt_cache_key": test.cacheKey})
+			hash, raw := stableSession(headers, body, map[string]any{"caller_scope": "test-caller"})
+			if raw != test.want || (test.want == "" && hash != "") || (test.want != "" && hash != digest("test-caller\x00"+test.want)) {
+				t.Fatalf("identity = (%q, %q), want session %q", hash, raw, test.want)
+			}
+		})
+	}
+}
+
+func TestHarnessAdmissionContinuationAndForeignProtection(t *testing.T) {
+	routeFixture(t)
+	ar := arCandidate("ar", "mock-secret", 10)
+	route := func(id, session string, history bool, candidates ...sdk.SchedulerAuthCandidate) (sdk.SchedulerPickResponse, execution) {
+		input := []map[string]any{{"role": "user", "content": "hello"}}
+		if history {
+			input = append(input, map[string]any{"role": "assistant", "content": "previous reply"}, map[string]any{"role": "user", "content": "continue"})
+		}
+		body, _ := json.Marshal(map[string]any{"input": input, "prompt_cache_key": session, "store": false})
+		headers := http.Header{"User-Agent": {"deepseek-harness/0.2.2-rc.1"}, "X-Client-Request-Id": {session}}
+		metadata := map[string]any{"caller_scope": "test-caller"}
+		before := beforeAdmission(sdk.RequestInterceptRequest{RequestID: id, Headers: headers, Body: body, Metadata: metadata})
+		headers.Set(admissionHeader, before.Headers.Get(admissionHeader))
+		picked := pickAdmission(sdk.SchedulerPickRequest{Model: "test-model", Options: sdk.SchedulerOptions{Headers: headers, Metadata: metadata}, Candidates: candidates})
+		return picked, execution{ExecutorRequest: sdk.ExecutorRequest{AuthID: picked.AuthID, AuthProvider: pluginID, Headers: headers, Metadata: metadata, OriginalRequest: body}}
+	}
+	for i, history := range []bool{false, true} {
+		picked, q := route([]string{"first", "continue"}[i], "harness-new", history, ar)
+		if picked.AuthID != ar.ID || picked.Reject {
+			t.Fatalf("DSH turn %d denied: %+v", i, picked)
+		}
+		release, err := acquireExecution(q, testCredential())
+		if err != nil {
+			t.Fatal(err)
+		}
+		release()
+	}
+	picked, _ := route("old-history", "harness-unknown", true, ar)
+	if !picked.Reject {
+		t.Fatal("unknown DSH history entered AR")
+	}
+	// Starting with another provider and then dropping history cannot change origin.
+	route("external-first", "harness-foreign", false, otherCandidate())
+	picked, _ = route("external-replay", "harness-foreign", false, ar)
+	if !picked.Reject {
+		t.Fatal("foreign DSH conversation entered AR")
+	}
+	for _, session := range []string{"harness-slot-one", "harness-slot-two"} {
+		picked, _ = route(session, session, false, ar)
+		if picked.AuthID != ar.ID {
+			t.Fatal(picked)
+		}
+	}
+	picked, _ = route("slot-third", "harness-slot-three", false, ar)
+	if !picked.Reject {
+		t.Fatal("DSH exceeded the per-Key concurrent session limit")
+	}
+}
 func TestExistingForeignAndUnidentifiedHistoryNeverEnterAR(t *testing.T) {
 	routeFixture(t)
 	ar := arCandidate("ar", "mock-secret", 10)

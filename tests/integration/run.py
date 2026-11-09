@@ -8,6 +8,7 @@ ROOT = None
 SCENARIO = 'success'
 COUNTS = {}
 CAPTURE = []
+KEY_CAPTURE = []
 STARTED = threading.Event()
 RELEASE = threading.Event()
 PRICING_DIAGNOSTIC = 'model ar-mock-model tiered expr run failed: expr compile error: unknown name cc12h (1:62)\n| tier("small", cc12h * 25)\n[trace_id=trace-pricing-integration]'
@@ -25,11 +26,11 @@ class Upstream(http.server.BaseHTTPRequestHandler):
             payload={'success':True,'group_ratio':{'default':1},'data':[{'model_name':'ar-mock-model','quota_type':0,'model_ratio':2,'completion_ratio':5,'enable_groups':['default']}]}
             self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps(payload).encode());return
         assert self.path=='/v1/models'
-        assert self.headers.get('Authorization')=='Bearer mock-secret'
+        assert self.headers.get('Authorization') in ('Bearer mock-secret','Bearer mock-second')
         self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(b'{"data":[{"id":"ar-mock-model"}]}')
     def do_POST(self):
         data = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
-        assert self.headers.get('Authorization') == 'Bearer mock-secret'
+        assert self.headers.get('Authorization') in ('Bearer mock-secret','Bearer mock-second')
         assert 'codex' in self.headers.get('User-Agent', '').lower()
         if globals().get('DEFAULT_HEADERS_REQUIRED'):
             assert self.headers.get('User-Agent')=='codex_exec/0.159.3 (Windows 10.0.19045; x86_64) dumb (codex_exec; 0.159.3)'
@@ -38,6 +39,7 @@ class Upstream(http.server.BaseHTTPRequestHandler):
         scenario = data.get('metadata', {}).get('test_scenario', SCENARIO)
         COUNTS[scenario] = COUNTS.get(scenario, 0) + 1
         CAPTURE.append((scenario, data))
+        KEY_CAPTURE.append((scenario, self.headers.get('Authorization')))
         attempt = COUNTS[scenario]
         if scenario == 'limit' and attempt == 1:
             self.send_response(429); self.send_header('Content-Type','application/json');self.end_headers()
@@ -212,6 +214,37 @@ if __name__ == '__main__':
         (auth/'ar-mock.json').write_text(json.dumps(credential))
         time.sleep(1)
         DEFAULT_HEADERS_REQUIRED=True
+        # DSH's generic Responses transport sends no Codex session header.
+        for carrier in ('both', 'header', 'body'):
+            session='harness-session-'+carrier
+            for turn in range(2):
+                scenario='harness-'+carrier+'-'+str(turn)
+                items=[{'role':'user','content':'Reply OK'}]
+                if turn:items += [{'role':'assistant','content':'OK'},{'role':'user','content':'Continue'}]
+                body={'model':'ar/ar-mock-model','input':items,'stream':True,'store':False,'metadata':{'test_scenario':scenario}}
+                headers={'Authorization':'Bearer mock-client','Content-Type':'application/json','User-Agent':'deepseek-harness/0.2.2-rc.1'}
+                if carrier != 'body':headers['X-Client-Request-Id']=session
+                if carrier != 'header':body['prompt_cache_key']=session
+                req=urllib.request.Request('http://127.0.0.1:'+str(listen)+'/v1/responses',data=json.dumps(body).encode(),headers=headers)
+                response=op.open(req,timeout=20).read()
+                assert b'response.completed' in response and COUNTS.get(scenario)==1,(carrier,turn,response)
+            print('PASS harness-session-'+carrier+' first turn and continuation',flush=True)
+        for scenario,agent,header,cache,items in [
+            ('harness-unidentified','deepseek-harness/0.2.2-rc.1','','',[{'role':'user','content':'Hello'}]),
+            ('harness-conflict','deepseek-harness/0.2.2-rc.1','harness-conflict-one','harness-conflict-two',[{'role':'user','content':'Hello'}]),
+            ('harness-unknown-history','deepseek-harness/0.2.2-rc.1','harness-unknown-history','harness-unknown-history',[{'role':'assistant','content':'Previous'},{'role':'user','content':'Continue'}]),
+            ('ordinary-request-id','ordinary-client','ordinary-request-id','',[{'role':'user','content':'Hello'}]),
+        ]:
+            body={'model':'ar/ar-mock-model','input':items,'stream':True,'metadata':{'test_scenario':scenario}}
+            if cache:body['prompt_cache_key']=cache
+            headers={'Authorization':'Bearer mock-client','Content-Type':'application/json','User-Agent':agent}
+            if header:headers['X-Client-Request-Id']=header
+            req=urllib.request.Request('http://127.0.0.1:'+str(listen)+'/v1/responses',data=json.dumps(body).encode(),headers=headers)
+            try:response=op.open(req,timeout=20).read()
+            except urllib.error.HTTPError as error:assert b'ar_session_ineligible' in error.read(),scenario
+            else:assert b'ar_session_ineligible' in response,scenario
+            assert not COUNTS.get(scenario),'ineligible request reached upstream: '+scenario
+            print('PASS '+scenario+' rejected before upstream',flush=True)
         for scenario,attempts,success in [('success',1,True),('limit',2,True),('decrypt',3,False),('disconnect',2,True),('after_output',1,False),('auth',1,False)]:
             if scenario=='decrypt':
                 body={'model':'ar/ar-mock-model','input':'start this conversation','stream':True,'metadata':{'test_scenario':'decrypt-start'}}
@@ -437,6 +470,42 @@ if __name__ == '__main__':
         credential['max_concurrent_sessions']=2
         (auth/'ar-mock.json').write_text(json.dumps(credential));time.sleep(1)
         print('PASS configured limits 1/3, shared counts, live reduction, legacy edits, validation',flush=True)
+        second=dict(credential,id='ar-mock-second',api_key='mock-second')
+        second_path=auth/'ar-mock-second.json'
+        second_path.write_text(json.dumps(second));second_path.chmod(0o600);time.sleep(1)
+        RELEASE.clear();outputs=[]
+        workers=[]
+        for n in range(4):
+            scenario='slot-balanced-'+str(n)
+            worker=threading.Thread(target=lambda n=n:outputs.append(mixed('balanced-'+str(n),'slot-balanced-'+str(n))))
+            workers.append(worker);worker.start()
+            for _ in range(50):
+                if COUNTS.get(scenario)==1:break
+                time.sleep(.1)
+            else:raise AssertionError('balanced session did not start')
+            sequence=[key for name,key in KEY_CAPTURE if name.startswith('slot-balanced-')]
+            if len(sequence)>1:assert sequence[-1]!=sequence[-2],sequence
+        sequence=[key for name,key in KEY_CAPTURE if name.startswith('slot-balanced-')]
+        assert sequence.count('Bearer mock-secret')==2 and sequence.count('Bearer mock-second')==2,sequence
+        assert 'OTHER' in mixed('balanced-overflow','balanced-overflow') and not COUNTS.get('balanced-overflow')
+        RELEASE.set()
+        for worker in workers:worker.join(10)
+        assert len(outputs)==4 and all('response.completed' in result for result in outputs)
+        print('PASS two Keys distribute active sessions alternately 2/2',flush=True)
+        pinned_path=auth/'ar-mock.json' if sequence[0]=='Bearer mock-secret' else second_path
+        pinned=json.loads(pinned_path.read_text())
+        pinned_path.write_text(json.dumps(dict(pinned,disabled=True)));time.sleep(1)
+        baseline=ar_attempts();other_baseline=sum(OTHER_COUNTS.values())
+        for model in ['ar-mock-model','other-only']:
+            try:mixed('balanced-0','pinned-key-unavailable-'+model,model,history=True)
+            except urllib.error.HTTPError as error:assert b'ar_session_ineligible' in error.read()
+            else:raise AssertionError('bound conversation switched Key or provider')
+        assert ar_attempts()==baseline and sum(OTHER_COUNTS.values())==other_baseline
+        pinned_path.write_text(json.dumps(pinned));time.sleep(1)
+        assert 'response.completed' in mixed('balanced-0','pinned-key-restored',history=True)
+        assert next(key for scenario,key in KEY_CAPTURE if scenario=='pinned-key-restored')==sequence[0]
+        second_path.unlink();time.sleep(1)
+        print('PASS original Key unavailable rejects, restored Key resumes same conversation',flush=True)
         # State survives a configuration reload, without altering the other provider's routing.
         cfg['plugins']['configs']['cpa-agentrouter-continuity']['priority']=2;config.write_text(yaml.safe_dump(cfg));time.sleep(1)
         assert 'OTHER' in mixed('foreign-session','foreign-after-reload')

@@ -1,6 +1,6 @@
 # AR Continuity
 
-当前版本：**0.5.2**。
+当前版本：**0.5.4**，包含 DSH Responses 兼容、Key 均衡与会话粘性。
 
 AgentRouter 专用的 CPA 插件，提供 API Key 管理、请求监控、连接检测和 Responses HTTP/SSE 的有限故障恢复。只处理 `https://agentrouter.org/v1`，不替换 CPA 内置 Codex 执行器。
 
@@ -10,7 +10,7 @@ AgentRouter 专用的 CPA 插件，提供 API Key 管理、请求监控、连接
 - **请求日志**：按模型、请求 ID、错误码、状态和 Key 筛选；支持分页、耗时查看和内部恢复详情。
 - **连接与策略**：每 Key 独立展示近期请求表现、模型列表检测结果和实际配置。
 - **渠道定价**：读取 AgentRouter 公开定价接口并填入表单；默认单价、手动覆盖和费用估算保存在浏览器。
-- **来源与并发保护**：仅接纳符合来源规则的 AR 会话；每 Key 默认最多 2 个活跃会话，范围 1–100，同一会话复用名额。
+- **来源与并发保护**：新会话按活跃会话数均衡分配，数量相同时轮流选择；已有 AR 会话固定绑定原 Key。每 Key 默认最多 2 个活跃会话，范围 1–100，同一会话复用名额。
 - **有限内部重试**：首次内容交付前，在次数和等待预算内恢复临时限流、早期断流和部分历史验证错误。
 
 ## 安装与使用
@@ -19,10 +19,10 @@ AgentRouter 专用的 CPA 插件，提供 API Key 管理、请求监控、连接
 
 | 平台 | 插件文件 | 部署位置 |
 | --- | --- | --- |
-| Windows amd64 | `cpa-agentrouter-continuity-v0.5.2.dll` | `<plugins.dir>/windows/amd64/` |
-| Linux amd64 | `cpa-agentrouter-continuity-v0.5.2.so` | `<plugins.dir>/linux/amd64/` |
+| Windows amd64 | `cpa-agentrouter-continuity-v0.5.4.dll` | `<plugins.dir>/windows/amd64/` |
+| Linux amd64 | `cpa-agentrouter-continuity-v0.5.4.so` | `<plugins.dir>/linux/amd64/` |
 
-Linux 分发目标为 glibc 2.28 或更新，隔离测试使用 CPA 8.0.34（插件 RPC schema 6）。其他 CPU 架构、musl/Alpine 和不兼容插件 ABI 的宿主需要另行构建和验证。
+Linux 分发目标为 glibc 2.28 或更新，隔离测试使用 CPA 8.0.34（插件 RPC schema 6）；Windows amd64 在 CPA 8.0.57 上完成隔离加载、在途热更新及真实 AR 首轮与续聊验证。其他 CPU 架构、musl/Alpine 和不兼容插件 ABI 的宿主需要另行构建和验证。
 
 1. 备份目标机配置，将插件文件放入对应目录。
 2. 在 CPA 插件管理中启用 `cpa-agentrouter-continuity`。
