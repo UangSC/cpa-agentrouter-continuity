@@ -1,6 +1,8 @@
+<p align="center"><img src="web/logo.png" alt="AR Continuity Logo" width="112"></p>
+
 # AR Continuity
 
-当前版本：**0.5.4**，包含 DSH Responses 兼容、Key 均衡与会话粘性。
+当前版本：**0.5.5**，统一插件 Logo，保留 DSH Responses 兼容、Key 均衡与会话粘性。
 
 AgentRouter 专用的 CPA 插件，提供 API Key 管理、请求监控、连接检测和 Responses HTTP/SSE 的有限故障恢复。只处理 `https://agentrouter.org/v1`，不替换 CPA 内置 Codex 执行器。
 
@@ -19,8 +21,8 @@ AgentRouter 专用的 CPA 插件，提供 API Key 管理、请求监控、连接
 
 | 平台 | 插件文件 | 部署位置 |
 | --- | --- | --- |
-| Windows amd64 | `cpa-agentrouter-continuity-v0.5.4.dll` | `<plugins.dir>/windows/amd64/` |
-| Linux amd64 | `cpa-agentrouter-continuity-v0.5.4.so` | `<plugins.dir>/linux/amd64/` |
+| Windows amd64 | `cpa-agentrouter-continuity-v0.5.5.dll` | `<plugins.dir>/windows/amd64/` |
+| Linux amd64 | `cpa-agentrouter-continuity-v0.5.5.so` | `<plugins.dir>/linux/amd64/` |
 
 Linux 分发目标为 glibc 2.28 或更新，隔离测试使用 CPA 8.0.34（插件 RPC schema 6）；Windows amd64 在 CPA 8.0.57 上完成隔离加载、在途热更新及真实 AR 首轮与续聊验证。其他 CPU 架构、musl/Alpine 和不兼容插件 ABI 的宿主需要另行构建和验证。
 

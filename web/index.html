@@ -5,7 +5,7 @@
 <main class="shell">
  <header class="heading"><div class="brand"><img class="brand-mark" src="/v0/resource/plugins/cpa-agentrouter-continuity/logo.png" alt="AR Continuity"><div><h1>AR Continuity</h1><p>AgentRouter 请求控制台</p></div></div><div class="actions"><span id="connection" class="badge">未连接</span><span id="version" class="muted"></span><button id="refresh" hidden>刷新</button><button id="disconnect" class="quiet" hidden>断开连接</button></div></header>
  <section id="login" class="login card" aria-labelledby="login-title">
-  <span class="login-icon" aria-hidden="true">⌘</span><h2 id="login-title">连接 CPA</h2>
+  <img class="login-icon" src="/v0/resource/plugins/cpa-agentrouter-continuity/logo.png" alt=""><h2 id="login-title">连接 CPA</h2>
   <p>请输入 CPA 管理密钥。登录 CPA 管理面板时勾选「记住密码」，本页会自动使用该密钥。</p>
   <form id="connect-form"><label for="management-key">管理密钥</label><div class="connect-row"><input id="management-key" type="password" autocomplete="current-password" placeholder="请输入 CPA 管理密钥" required><button class="primary" type="submit" id="connect">连接 <span aria-hidden="true">→</span></button></div><label class="checkbox"><input type="checkbox" id="remember">记住密钥，下次自动连接</label></form>
   <p class="error" id="login-error" role="alert"></p><p class="small">管理密钥用于连接 CPA；AR API Key 在连接后单独管理。</p>
