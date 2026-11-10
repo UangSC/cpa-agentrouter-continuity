@@ -91,5 +91,5 @@
       }
     }
   ],
-  "max_concurrent_sessions": 2
+  "max_concurrent_requests": 2
 }

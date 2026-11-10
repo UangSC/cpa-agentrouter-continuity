@@ -80,6 +80,9 @@ func classify(status int, raw []byte) string {
 	if historyValidationFailure(code, msg) {
 		return "history"
 	}
+	if strings.Contains(code, "no_capacity") {
+		return "capacity"
+	}
 	if status == 429 || strings.Contains(code, "rate_limit") || strings.Contains(msg, "exceeded token rate limit") {
 		return "rate"
 	}
@@ -96,6 +99,8 @@ func retryDelay(kind string, index int, h http.Header) time.Duration {
 	base := []int{1, 2, 4, 8, 15}
 	if kind == "rate" {
 		base = []int{10, 20, 40, 60, 60}
+	} else if kind == "capacity" {
+		base = []int{5, 10, 20, 40, 60}
 	} else if kind == "history" {
 		base = []int{1, 3}
 	}

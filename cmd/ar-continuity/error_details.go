@@ -60,7 +60,7 @@ func historyValidationFailure(code, message string) bool {
 
 func failureKind(status int, raw []byte, cause error) string {
 	kind := classify(status, raw)
-	if kind == "history" || kind == pricingErrorKind || status == 401 || status == 403 {
+	if kind == "history" || kind == "capacity" || kind == "rate" || kind == pricingErrorKind || status == 401 || status == 403 {
 		return kind
 	}
 	if cause != nil {
@@ -88,6 +88,9 @@ func safeErrorWithCause(status int, raw []byte, cause error, secrets ...string) 
 	history := historyValidationFailure(d.Code, d.Message)
 	if status < 400 {
 		status = 502
+	}
+	if classify(status, raw) == "capacity" {
+		status = 503
 	}
 	code := d.Code
 	if history {
@@ -134,6 +137,10 @@ func safeErrorWithCause(status int, raw []byte, cause error, secrets ...string) 
 	runes := []rune(message)
 	if len(runes) > 350 {
 		message = string(runes[:350]) + "…"
+	}
+	code = redact(code)
+	if len([]rune(code)) > 128 {
+		code = string([]rune(code)[:128])
 	}
 	return &rpcError{Code: code, Message: prefix + " 原因：" + message, HTTPStatus: status}
 }

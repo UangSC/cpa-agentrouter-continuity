@@ -46,7 +46,7 @@
    </div>
    <footer class="dashboard-footer"><span><i class="live-dot"></i>AR Continuity <span id="footer-version"></span></span><span id="retention-note">聚合保留 24 小时 · 重载后重新统计</span></footer>
   </section>
-  <section id="credentials-panel" role="tabpanel" aria-labelledby="credentials-tab" class="card panel" hidden><div class="panel-heading"><div><h2>AR API Key</h2><p>每个 Key 独立配置模型、前缀和重试策略。</p></div><button class="primary" id="add-key"><span aria-hidden="true" class="plus-icon">＋</span>新增 API Key</button></div><div class="table-wrap"><table><thead><tr><th>名称 / API Key</th><th>状态</th><th>模型</th><th>前缀</th><th>并发会话</th><th>重试策略</th><th class="right">操作</th></tr></thead><tbody id="credential-rows"></tbody></table></div><div id="credential-empty" class="empty" hidden><strong>还没有 AR API Key</strong><p>新增 Key 后，可在这里启用并配置模型。</p></div><div class="panel-footer">Key 仅在服务器凭证中保存，页面不会回显完整密钥。默认使用 Codex 请求头。</div></section>
+  <section id="credentials-panel" role="tabpanel" aria-labelledby="credentials-tab" class="card panel" hidden><div class="panel-heading"><div><h2>AR API Key</h2><p>每个 Key 独立配置模型、前缀和重试策略。</p></div><button class="primary" id="add-key"><span aria-hidden="true" class="plus-icon">＋</span>新增 API Key</button></div><div class="table-wrap"><table><thead><tr><th>名称 / API Key</th><th>状态</th><th>模型</th><th>前缀</th><th>请求并发</th><th>重试策略</th><th class="right">操作</th></tr></thead><tbody id="credential-rows"></tbody></table></div><div id="credential-empty" class="empty" hidden><strong>还没有 AR API Key</strong><p>新增 Key 后，可在这里启用并配置模型。</p></div><div class="panel-footer">Key 仅在服务器凭证中保存，页面不会回显完整密钥。默认使用 Codex 请求头。</div></section>
   <section id="logs-panel" role="tabpanel" aria-labelledby="logs-tab" hidden>
    <div class="dashboard-heading page-heading"><div><h2>请求日志</h2><p>请求结果、响应耗时与内部恢复记录</p></div><span class="page-meta">北京时间 · 每 5 秒更新</span></div>
    <div class="page-summary" id="log-summary"></div>
@@ -62,11 +62,11 @@
    <div class="section-label"><h3>API Key 连接状态</h3><span>连接检测仅访问模型列表，不发送生成请求</span></div>
    <div class="connection-grid" id="health-cards"></div>
    <div class="section-label"><h3>当前配置</h3><span>每个 API Key 独立生效</span></div>
-   <section class="card config-table-card"><div class="table-wrap"><table class="config-table"><thead><tr><th>API Key</th><th>活跃会话 / 上限</th><th>额外重试</th><th>等待预算</th><th>模型前缀</th><th class="right">操作</th></tr></thead><tbody id="policy-rows"></tbody></table></div><div id="policy-empty" class="visual-empty" hidden><strong>暂无配置</strong><p>添加 API Key 后显示当前策略。</p></div></section>
+   <section class="card config-table-card"><div class="table-wrap"><table class="config-table"><thead><tr><th>API Key</th><th>执行请求 / 上限</th><th>排队请求</th><th>额外重试</th><th>等待预算</th><th>模型前缀</th><th class="right">操作</th></tr></thead><tbody id="policy-rows"></tbody></table></div><div id="policy-empty" class="visual-empty" hidden><strong>暂无配置</strong><p>添加 API Key 后显示当前策略。</p></div></section>
    <div class="section-label"><h3>请求保护规则</h3><span>由插件自动执行</span></div>
    <div class="protection-grid">
-    <article class="card protection-card"><span class="protection-icon" data-icon="shield"></span><div><h3>会话来源与并发</h3><p>仅接纳来源符合规则的 AR 会话；闲置窗口不占用名额，同一会话的多个请求共用名额。</p><span class="policy-tag">按 Key 限制并发</span></div></article>
-    <article class="card protection-card"><span class="protection-icon" data-icon="recovery"></span><div><h3>限流与早期断流</h3><p>首次内容交付前，在 Key 的次数与等待预算内重试；成功后在原连接返回结果。</p><span class="policy-tag">遵循上游等待时间</span></div></article>
+    <article class="card protection-card"><span class="protection-icon" data-icon="shield"></span><div><h3>会话继承与请求并发</h3><p>同一 Key 共享请求名额，超限排队。有可靠父会话引用的子会话继承父 Key；已有子会话绑定优先保留。</p><span class="policy-tag">按 Key 限制并发</span></div></article>
+    <article class="card protection-card"><span class="protection-icon" data-icon="recovery"></span><div><h3>容量不足、限流与早期断流</h3><p>容量不足、限流和断流在首次内容交付前，按 Key 的次数与等待预算退避重试；成功后在原连接返回结果。</p><span class="policy-tag">遵循上游等待时间</span></div></article>
     <article class="card protection-card"><span class="protection-icon" data-icon="lock"></span><div><h3>加密历史验证失败</h3><p>保留原始历史、Key 和模型，最多额外重试 2 次，仍计入当前 Key 的总次数与等待预算。</p><span class="policy-tag">不清理或改写历史</span></div></article>
     <article class="card protection-card"><span class="protection-icon" data-icon="stop"></span><div><h3>终止与重放边界</h3><p>已交付文字、推理或工具事件后不自动重放；认证、配额、内容过滤及计费配置错误立即终止。</p><span class="policy-tag">避免重复执行</span></div></article>
    </div>
@@ -90,7 +90,7 @@
      <div class="field"><label for="field-label">凭证名称</label><input id="field-label" maxlength="120" placeholder="例如：日常开发" required></div>
      <div class="field"><label for="field-prefix">模型前缀 <span class="optional">可选</span></label><input id="field-prefix" maxlength="64" placeholder="留空，使用原模型名"></div>
      <div class="field full"><div class="field-heading"><label for="field-key">AR API Key</label><span class="field-tag">仅存储于服务器</span></div><input id="field-key" type="password" autocomplete="new-password" placeholder="请输入 AR API Key"><small id="key-hint">提交后不回显完整密钥。</small></div>
-     <div class="field full"><label for="field-concurrency">并发会话上限</label><div class="input-unit"><input id="field-concurrency" type="number" min="1" max="100" step="1" value="2" required><span aria-hidden="true">个</span></div><small>默认 2，范围 1–100。同一会话的多个请求共用名额，闲置会话不计入。调整后影响新会话准入，不中断已在途请求。</small></div>
+     <div class="field full"><label for="field-request-concurrency">请求并发上限</label><div class="input-unit"><input id="field-request-concurrency" type="number" min="1" max="100" step="1" value="2" required><span aria-hidden="true">个</span></div><small>同一 Key 的主代理、子代理及其他会话共用，范围 1–100；超出后按顺序排队。会话数量不设上限，闲置会话不占请求名额。旧配置自动沿用此前的 Key 总请求上限。</small></div>
      <div class="field full"><div class="field-heading"><label for="field-models">可用模型</label><button type="button" class="fetch-models" id="fetch-models">获取模型</button></div><textarea id="field-models" rows="4" required spellcheck="false"></textarea><small>设置别名：显示名 = 上游模型名</small></div>
     </div>
     <div class="enable-card"><div><label for="field-enabled">启用此凭证</label><p>启用后，符合会话保护规则的请求才可使用。</p></div><label class="switch" aria-label="启用此 API Key"><input id="field-enabled" type="checkbox" role="switch" aria-label="启用此 API Key"><span class="switch-track" aria-hidden="true"></span></label></div>

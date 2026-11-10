@@ -72,11 +72,19 @@ class Upstream(http.server.BaseHTTPRequestHandler):
         if scenario=='history_json_recover' and not data.get('stream'):
             self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers()
             self.wfile.write(json.dumps({'id':'resp_mock','object':'response','status':'completed','model':data['model'],'output':[],'usage':{'input_tokens':25,'output_tokens':4,'input_tokens_details':{'cached_tokens':20}}}).encode());return
+        if not data.get('stream'):
+            self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers()
+            if scenario=='json-error-200':self.wfile.write(b'{"error":{"code":"invalid_api_key","message":"mock-secret rejected"}}');return
+            if scenario=='json-invalid-200':self.wfile.write(b'<html>temporary gateway error</html>');return
+            self.wfile.write(json.dumps({'id':'resp_mock','object':'response','status':'completed','model':data['model'],'output':[{'type':'message','role':'assistant','content':[{'type':'output_text','text':'OK'}]}]}).encode());return
         self.send_response(200);self.send_header('Content-Type','text/event-stream');self.end_headers()
         def event(value):
             raw=('data: '+json.dumps(value)+'\n\n').encode()
             self.wfile.write(raw);self.wfile.flush()
         event({'type':'response.created','response':{'id':'resp_mock','status':'in_progress'}})
+        if scenario in ('capacity_recover','capacity_exhausted','capacity_after_output') and (scenario!='capacity_recover' or attempt<=2):
+            if scenario=='capacity_after_output':event({'type':'response.output_text.delta','delta':'Keep capacity output'})
+            event({'type':'response.failed','response':{'status':'failed','error':{'code':'no_capacity','message':'No capacity available'}}});return
         if scenario in ('history_sse_recover','history_after_output') and (scenario=='history_after_output' or attempt<=2):
             if scenario=='history_after_output':event({'type':'response.output_text.delta','delta':'Keep history output'})
             event({'type':'response.failed','response':{'status':'failed','error':{'code':'invalid_encrypted_content','message':'The encrypted content for item rs_old could not be verified. [trace_id=history-integration]'}}});return
@@ -158,7 +166,7 @@ if __name__ == '__main__':
     listen=port(); auth=ROOT/'auths';auth.mkdir(exist_ok=True)
     credential={'type':'cpa-agentrouter-continuity','id':'ar-mock-only','api_key':'mock-secret','base_url':'https://agentrouter.org/v1','headers':{'User-Agent':'codex_exec/test'},'models':[{'ID':'ar-mock-model','Name':'ar-mock-model','Object':'model','OwnedBy':'cpa-agentrouter-continuity','Type':'codex','UserDefined':True}], 'max_retries':2,'model_prefix':'ar','priority':10}
     (auth/'ar-mock.json').write_text(json.dumps(credential));(auth/'ar-mock.json').chmod(0o600)
-    cfg={'config-version':8,'server':{'host':'127.0.0.1','port':listen},'access':{'api-keys':['mock-client']},'oauth':{'auth-dir':str(auth)},'requests':{'proxy-url':'http://127.0.0.1:'+str(mock.server_address[1])},'routing':{'retry':{'request-retry':0}},'plugins':{'enabled':True,'dir':str(ROOT/'plugins'),'configs':{'cpa-agentrouter-continuity':{'enabled':True}}},'management':{'allow-remote':False,'secret-key':'mock-management','disable-control-panel':True}}
+    cfg={'config-version':8,'server':{'host':'127.0.0.1','port':listen},'access':{'api-keys':['mock-client']},'oauth':{'auth-dir':str(auth)},'requests':{'proxy-url':'http://127.0.0.1:'+str(mock.server_address[1])},'routing':{'cooldown':{'disable-cooling':True},'retry':{'request-retry':0}},'plugins':{'enabled':True,'dir':str(ROOT/'plugins'),'configs':{'cpa-agentrouter-continuity':{'enabled':True}}},'management':{'allow-remote':False,'secret-key':'mock-management','disable-control-panel':True}}
     cfg['api-keys']={'openai-compatibility':[{'name':'mock-other','base-url':'http://127.0.0.1:'+str(other.server_port)+'/v1','keys':[{'api-key':'mock-other','proxy-url':'direct'}],'models':[{'name':'ar-mock-model'},{'name':'other-only'}]}]}
     config=ROOT/'config.yaml';config.write_text(yaml.safe_dump(cfg));config.chmod(0o600)
     log=open(ROOT/'isolated.log','w');env=dict(os.environ,SSL_CERT_FILE=str(cert),NO_PROXY='127.0.0.1,localhost',no_proxy='127.0.0.1,localhost')
@@ -191,6 +199,8 @@ if __name__ == '__main__':
         else:raise RuntimeError('plugin model not published: '+str(ids))
         print('ISOLATED_READY',process.pid,'models',ids,flush=True)
         if args.previous_plugin:
+            credential['max_concurrent_requests']=1
+            (auth/'ar-mock.json').write_text(json.dumps(credential));time.sleep(1)
             response=[]
             holding=threading.Thread(target=lambda:response.append(request('hold')));holding.start();assert STARTED.wait(5)
             shutil.copy2(args.plugin,current_plugin)
@@ -203,10 +213,21 @@ if __name__ == '__main__':
                 except Exception:pass
                 time.sleep(.2)
             else:raise AssertionError('new plugin version not active')
-            RELEASE.set();holding.join(10)
+            queued=[]
+            waiter=threading.Thread(target=lambda:queued.append(request('hold')));waiter.start()
+            for _ in range(50):
+                snapshot=manage('/overview')
+                if any(r['status']=='queued' for r in snapshot['logs']['active']):break
+                time.sleep(.1)
+            else:raise AssertionError('new generation did not count the old in-flight request')
+            assert COUNTS.get('hold')==1,'hot upgrade bypassed per-session cap'
+            RELEASE.set();holding.join(10);waiter.join(10)
+            assert queued and 'response.completed' in queued[0]
             assert response and 'response.completed' in response[0] and process.poll() is None
             print('PASS binary-hot-upgrade-with-active-stream',flush=True)
             STARTED.clear();RELEASE.clear()
+            credential.pop('max_concurrent_requests',None)
+            (auth/'ar-mock.json').write_text(json.dumps(credential));time.sleep(1)
         assert manage('/overview')['version']==expected_version
         print('PASS loaded-version',expected_version,flush=True)
         # New installs need no explicit User-Agent or Originator fields.
@@ -230,10 +251,9 @@ if __name__ == '__main__':
                 assert b'response.completed' in response and COUNTS.get(scenario)==1,(carrier,turn,response)
             print('PASS harness-session-'+carrier+' first turn and continuation',flush=True)
         for scenario,agent,header,cache,items in [
-            ('harness-unidentified','deepseek-harness/0.2.2-rc.1','','',[{'role':'user','content':'Hello'}]),
             ('harness-conflict','deepseek-harness/0.2.2-rc.1','harness-conflict-one','harness-conflict-two',[{'role':'user','content':'Hello'}]),
             ('harness-unknown-history','deepseek-harness/0.2.2-rc.1','harness-unknown-history','harness-unknown-history',[{'role':'assistant','content':'Previous'},{'role':'user','content':'Continue'}]),
-            ('ordinary-request-id','ordinary-client','ordinary-request-id','',[{'role':'user','content':'Hello'}]),
+            ('anonymous-history','Trae/test','','',[{'role':'assistant','content':'Previous'},{'role':'user','content':'Continue'}]),
         ]:
             body={'model':'ar/ar-mock-model','input':items,'stream':True,'metadata':{'test_scenario':scenario}}
             if cache:body['prompt_cache_key']=cache
@@ -245,6 +265,28 @@ if __name__ == '__main__':
             else:assert b'ar_session_ineligible' in response,scenario
             assert not COUNTS.get(scenario),'ineligible request reached upstream: '+scenario
             print('PASS '+scenario+' rejected before upstream',flush=True)
+        # Model setup probes have no conversation yet. Keep them stateless.
+        for agent in ['Trae/test','deepseek-harness/0.2.2-rc.1','ordinary-client']:
+            for streaming in [True,False]:
+                scenario='probe-'+agent.split('/')[0]+'-'+str(streaming)
+                before_origins=json.loads((ROOT/'plugins/cpa-agentrouter-continuity-sessions.json').read_text())['origins']
+                body={'model':'ar/ar-mock-model','input':'Reply OK','stream':streaming,'metadata':{'test_scenario':scenario}}
+                headers={'Authorization':'Bearer mock-client','Content-Type':'application/json','User-Agent':agent}
+                if agent=='ordinary-client':headers['X-Client-Request-Id']='request-only'
+                req=urllib.request.Request('http://127.0.0.1:'+str(listen)+'/v1/responses',data=json.dumps(body).encode(),headers=headers)
+                response=op.open(req,timeout=20).read().decode()
+                assert ('response.completed' in response) if streaming else json.loads(response)['status']=='completed'
+                assert COUNTS[scenario]==1
+                after_origins=json.loads((ROOT/'plugins/cpa-agentrouter-continuity-sessions.json').read_text())['origins']
+                assert after_origins==before_origins,'anonymous probe retained origin state'
+                print('PASS',scenario,'no stable ID, no persisted origin',flush=True)
+        for scenario in ['json-error-200','json-invalid-200']:
+            try:request(scenario,False)
+            except urllib.error.HTTPError as error:
+                response=error.read().decode();assert error.code>=400 and 'mock-secret' not in response
+            else:raise AssertionError('HTTP 200 error envelope accepted as success')
+            assert COUNTS.get(scenario)==(1 if scenario=='json-error-200' else 3),(scenario,COUNTS.get(scenario),response)
+            print('PASS',scenario,'reported failure, no credential echo',flush=True)
         for scenario,attempts,success in [('success',1,True),('limit',2,True),('decrypt',3,False),('disconnect',2,True),('after_output',1,False),('auth',1,False)]:
             if scenario=='decrypt':
                 body={'model':'ar/ar-mock-model','input':'start this conversation','stream':True,'metadata':{'test_scenario':'decrypt-start'}}
@@ -274,6 +316,17 @@ if __name__ == '__main__':
                     events=[json.loads(line[5:]) for line in response.splitlines() if line.startswith('data:') and line[5:].strip()!='[DONE]']
                     assert not any(e.get('type')=='error' for e in events)
             print('PASS',scenario,'one client request, internal attempts',attempts,'history preserved',flush=True)
+        for scenario,wanted in [('capacity_recover',3),('capacity_exhausted',3),('capacity_after_output',1)]:
+            response=request(scenario)
+            assert COUNTS.get(scenario)==wanted,(scenario,COUNTS)
+            if scenario=='capacity_recover':assert 'response.completed' in response and 'no_capacity' not in response
+            else:assert 'no_capacity' in response
+            if scenario=='capacity_after_output':assert 'Keep capacity output' in response
+            captures=[data for name,data in CAPTURE if name==scenario]
+            assert all(data==captures[0] for data in captures)
+            record=next(r for r in reversed(manage('/overview')['logs']['recent']) if r['model']=='ar/ar-mock-model')
+            if scenario=='capacity_recover':assert record['retry_reasons']==['capacity','capacity'],record
+            print('PASS',scenario,'attempts',wanted,'same history and capacity backoff',flush=True)
         analytics=manage('/overview')['logs']['analytics']
         assert analytics['bucket_minutes']==5
         buckets=analytics['buckets']
@@ -406,6 +459,11 @@ if __name__ == '__main__':
             req=urllib.request.Request('http://127.0.0.1:'+str(listen)+'/v1/responses',data=json.dumps(body).encode(),headers={'Authorization':'Bearer mock-client','Content-Type':'application/json','Session_id':session})
             return op.open(req,timeout=45).read().decode()
         def ar_attempts():return sum(COUNTS.values())
+        def wait_idle():
+            for _ in range(60):
+                if not manage('/overview')['routing']['active_sessions']:return
+                time.sleep(.1)
+            raise AssertionError('session reservations were not released')
         baseline=ar_attempts();assert 'OTHER' in mixed('foreign-session','foreign-start','other-only')
         assert 'OTHER' in mixed('foreign-session','foreign-switch')
         assert ar_attempts()==baseline,'non-AR origin entered AR'
@@ -416,60 +474,99 @@ if __name__ == '__main__':
         result=mixed('new-ar-session','ar-continued',history=True)
         assert COUNTS.get('ar-continued')==1
         print('PASS non-AR-origin excluded, unknown-history excluded, AR-continuation admitted',flush=True)
+        queue_edit=dict(edit,model_prefix='',max_concurrent_requests=2)
+        manage('/credentials',queue_edit,'PUT');time.sleep(1)
         RELEASE.clear();outputs=[]
-        threads=[threading.Thread(target=lambda n=n:outputs.append(mixed('busy-'+str(n),'slot-'+str(n)))) for n in range(2)]
-        for worker in threads:worker.start()
+        first=threading.Thread(target=lambda:outputs.append(mixed('queue-same','slot-queue-first')));first.start()
         for _ in range(50):
-            if COUNTS.get('slot-0')==1 and COUNTS.get('slot-1')==1:break
+            if COUNTS.get('slot-queue-first'):break
             time.sleep(.1)
-        else:raise AssertionError('two active AR sessions did not start')
-        assert 'OTHER' in mixed('third-session','overflow')
-        assert not COUNTS.get('overflow'),'third session exceeded key cap'
+        else:raise AssertionError('queue first did not start')
+        second=threading.Thread(target=lambda:outputs.append(mixed('queue-same','slot-queue-second')));second.start()
+        for _ in range(50):
+            if COUNTS.get('slot-queue-second'):break
+            time.sleep(.1)
+        else:raise AssertionError('same session was incorrectly serialized')
+        third=threading.Thread(target=lambda:outputs.append(mixed('queue-other','slot-queue-other')));third.start()
+        for _ in range(50):
+            active=manage('/overview')['logs']['active']
+            current=next(c for c in manage('/credentials')['credentials'] if c['auth_index']==item['auth_index'])
+            if any(r['status']=='queued' and r['attempts']==0 for r in active) and current['queued_requests']==1:break
+            time.sleep(.1)
+        else:raise AssertionError(('request did not queue',active))
+        assert current['active_requests']==2 and current['active_sessions']==2,current
+        assert not COUNTS.get('slot-queue-other'),'Key cap bypassed'
+        time.sleep(.3)
         RELEASE.set()
-        for worker in threads:worker.join(10)
-        assert len(outputs)==2 and all('response.completed' in x for x in outputs)
-        assert 'response.completed' in mixed('new-after-release','released')
-        assert COUNTS.get('released')==1
-        assert 'OTHER' in mixed('third-session','overflow-followup',history=True)
-        print('PASS two-session cap, non-AR fallback, release, origin remains external',flush=True)
-        # Change limits through the public API while preserving the runtime key.
-        assert item['max_concurrent_sessions']==2
-        config_edit=dict(edit,model_prefix='',max_concurrent_sessions=3)
-        manage('/credentials',config_edit,'PUT')
-        assert json.loads((auth/'ar-mock.json').read_text())['max_concurrent_sessions']==3
-        time.sleep(1)
+        for worker in [first,second,third]:worker.join(15)
+        assert len(outputs)==3 and all('response.completed' in result for result in outputs)
+        assert COUNTS.get('slot-queue-other')==1
+        wait_idle()
+        assert 'response.completed' in mixed('queue-other','queue-sticky-continued',history=True)
+        queue_record=next(r for r in reversed(manage('/overview')['logs']['recent']) if r.get('queue_wait_ms',0)>100)
+        assert queue_record['attempts']==1 and queue_record['queue_wait_ms']>=100,queue_record
+        # Queue cancellation is observed by stream heartbeats and frees its reservation.
+        queue_edit['max_concurrent_requests']=1
+        manage('/credentials',queue_edit,'PUT');time.sleep(1)
+        RELEASE.clear();outputs=[]
+        first=threading.Thread(target=lambda:outputs.append(mixed('queue-cancel','slot-queue-holder')));first.start()
+        for _ in range(50):
+            if COUNTS.get('slot-queue-holder'):break
+            time.sleep(.1)
+        else:raise AssertionError('queue cancel holder did not start')
+        payload=json.dumps({'model':'ar-mock-model','input':'queue cancel','stream':True,'metadata':{'test_scenario':'slot-queue-canceled'}})
+        client=subprocess.Popen(['curl','--noproxy','*','-sS','-H','Authorization: Bearer mock-client','-H','Content-Type: application/json','-H','Session_id: queue-cancel','-d',payload,'http://127.0.0.1:'+str(listen)+'/v1/responses'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        for _ in range(50):
+            if any(r['status']=='queued' for r in manage('/overview')['logs']['active']):break
+            time.sleep(.1)
+        else:raise AssertionError('cancel request did not queue')
+        client.terminate();client.wait();time.sleep(6)
+        assert not COUNTS.get('slot-queue-canceled')
+        assert not any(r['status']=='queued' for r in manage('/overview')['logs']['active'])
+        payload=json.dumps({'model':'ar-mock-model','input':'cancel JSON','stream':False,'metadata':{'test_scenario':'json-queue-canceled'}})
+        client=subprocess.Popen(['curl','--noproxy','*','-sS','-H','Authorization: Bearer mock-client','-H','Content-Type: application/json','-H','Session_id: queue-cancel-json','-d',payload,'http://127.0.0.1:'+str(listen)+'/v1/responses'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        for _ in range(50):
+            if any(r['status']=='queued' for r in manage('/overview')['logs']['active']):break
+            time.sleep(.1)
+        else:raise AssertionError('non-stream request did not queue')
+        client.terminate();client.wait()
+        for _ in range(60):
+            if not any(r['status']=='queued' for r in manage('/overview')['logs']['active']):break
+            time.sleep(.1)
+        else:raise AssertionError('non-stream cancellation retained queued request')
+        assert not COUNTS.get('json-queue-canceled')
+        print('PASS non-stream queued cancellation releases without upstream call',flush=True)
+        RELEASE.set();first.join(15)
+        assert len(outputs)==1 and 'response.completed' in outputs[0]
+        for field in ['max_concurrent_requests']:
+            for invalid in [0,-1,101,1.5]:
+                try:manage('/credentials',dict(queue_edit,**{field:invalid}),'PUT')
+                except urllib.error.HTTPError as error:assert error.code==400
+                else:raise AssertionError('invalid request cap accepted')
+        # Legacy session fields do not independently gate admission after migration.
+        config_edit=dict(edit,model_prefix='',max_concurrent_requests=3)
+        manage('/credentials',config_edit,'PUT');time.sleep(1)
         RELEASE.clear();outputs=[]
         threads=[threading.Thread(target=lambda n=n:outputs.append(mixed('custom-'+str(n),'slot-custom-'+str(n)))) for n in range(3)]
         for worker in threads:worker.start()
         for _ in range(50):
             if all(COUNTS.get('slot-custom-'+str(n))==1 for n in range(3)):break
             time.sleep(.1)
-        else:raise AssertionError('configured limit three did not admit three sessions')
-        current=next(c for c in manage('/credentials')['credentials'] if c['auth_index']==item['auth_index'])
-        assert current['active_sessions']==3 and current['max_concurrent_sessions']==3
-        assert 'OTHER' in mixed('custom-overflow','custom-overflow') and not COUNTS.get('custom-overflow')
-        config_edit['max_concurrent_sessions']=1
+        else:raise AssertionError('three request slots did not start')
+        config_edit['max_concurrent_requests']=1
         manage('/credentials',config_edit,'PUT');time.sleep(1)
-        assert 'OTHER' in mixed('lowered-overflow','lowered-overflow') and not COUNTS.get('lowered-overflow')
-        assert all(worker.is_alive() for worker in threads),'lowering the limit canceled existing streams'
+        assert all(worker.is_alive() for worker in threads),'lowering request cap canceled work'
         RELEASE.set()
         for worker in threads:worker.join(10)
         assert len(outputs)==3 and all('response.completed' in x for x in outputs)
-        config_edit.pop('max_concurrent_sessions')
+        wait_idle()
+        config_edit.pop('max_concurrent_requests')
         manage('/credentials',config_edit,'PUT')
-        assert json.loads((auth/'ar-mock.json').read_text())['max_concurrent_sessions']==1
-        RELEASE.clear();STARTED.clear();single=[]
-        worker=threading.Thread(target=lambda:single.append(mixed('limit-one','slot-limit-one')));worker.start();assert STARTED.wait(5)
-        assert 'OTHER' in mixed('limit-one-overflow','limit-one-overflow') and not COUNTS.get('limit-one-overflow')
-        RELEASE.set();worker.join(10);assert single and 'response.completed' in single[0]
-        for invalid in [0,-1,101,1.5]:
-            try:manage('/credentials',dict(config_edit,max_concurrent_sessions=invalid),'PUT')
-            except urllib.error.HTTPError as error:assert error.code==400
-            else:raise AssertionError('invalid session limit accepted')
-        credential=json.loads((auth/'ar-mock.json').read_text())
-        credential['max_concurrent_sessions']=2
+        stored=json.loads((auth/'ar-mock.json').read_text())
+        assert stored['max_concurrent_requests']==1 and 'max_concurrent_sessions' not in stored and 'max_concurrent_requests_per_session' not in stored
+        credential=stored;credential['max_concurrent_requests']=2
         (auth/'ar-mock.json').write_text(json.dumps(credential));time.sleep(1)
-        print('PASS configured limits 1/3, shared counts, live reduction, legacy edits, validation',flush=True)
+        print('PASS request caps 1/2/3, same-session parallel requests, queue cancellation, reduction and migration',flush=True)
         second=dict(credential,id='ar-mock-second',api_key='mock-second')
         second_path=auth/'ar-mock-second.json'
         second_path.write_text(json.dumps(second));second_path.chmod(0o600);time.sleep(1)
@@ -487,10 +584,12 @@ if __name__ == '__main__':
             if len(sequence)>1:assert sequence[-1]!=sequence[-2],sequence
         sequence=[key for name,key in KEY_CAPTURE if name.startswith('slot-balanced-')]
         assert sequence.count('Bearer mock-secret')==2 and sequence.count('Bearer mock-second')==2,sequence
-        assert 'OTHER' in mixed('balanced-overflow','balanced-overflow') and not COUNTS.get('balanced-overflow')
+        overflow=threading.Thread(target=lambda:outputs.append(mixed('balanced-overflow','slot-balanced-overflow')));overflow.start()
+        time.sleep(.4);assert not COUNTS.get('slot-balanced-overflow')
+        workers.append(overflow)
         RELEASE.set()
         for worker in workers:worker.join(10)
-        assert len(outputs)==4 and all('response.completed' in result for result in outputs)
+        assert len(outputs)==5 and all('response.completed' in result for result in outputs)
         print('PASS two Keys distribute active sessions alternately 2/2',flush=True)
         pinned_path=auth/'ar-mock.json' if sequence[0]=='Bearer mock-secret' else second_path
         pinned=json.loads(pinned_path.read_text())
@@ -504,6 +603,24 @@ if __name__ == '__main__':
         pinned_path.write_text(json.dumps(pinned));time.sleep(1)
         assert 'response.completed' in mixed('balanced-0','pinned-key-restored',history=True)
         assert next(key for scenario,key in KEY_CAPTURE if scenario=='pinned-key-restored')==sequence[0]
+        def child_request(session,parent,scenario,model='ar-mock-model'):
+            body={'model':model,'input':[{'role':'user','content':'original'},{'role':'assistant','content':'inherited history'},{'role':'user','content':'continue'}],'stream':True,'metadata':{'test_scenario':scenario}}
+            req=urllib.request.Request('http://127.0.0.1:'+str(listen)+'/v1/responses',data=json.dumps(body).encode(),headers={'Authorization':'Bearer mock-client','Content-Type':'application/json','Session_id':session,'X-Parent-Session-Id':parent})
+            return op.open(req,timeout=45).read().decode()
+        for scenario,parent,child in [('child-inherits','balanced-0','child-0'),('grandchild-inherits','child-0','grandchild-0')]:
+            assert 'response.completed' in child_request(child,parent,scenario)
+            assert next(key for name,key in KEY_CAPTURE if name==scenario)==sequence[0]
+        assert 'response.completed' in child_request('balanced-1','balanced-0','child-existing-wins')
+        assert next(key for name,key in KEY_CAPTURE if name=='child-existing-wins')==sequence[1]
+        pinned_path.write_text(json.dumps(dict(pinned,disabled=True)));time.sleep(1)
+        try:child_request('child-0','balanced-0','child-pinned-unavailable')
+        except urllib.error.HTTPError as error:assert b'ar_session_ineligible' in error.read()
+        else:raise AssertionError('child switched Key')
+        assert not COUNTS.get('child-pinned-unavailable')
+        pinned_path.write_text(json.dumps(pinned));time.sleep(1)
+        assert 'response.completed' in mixed('child-0','child-restored',history=True)
+        assert next(key for name,key in KEY_CAPTURE if name=='child-restored')==sequence[0]
+        print('PASS child/grandchild inherit Key, existing child wins, unavailable Key preserves binding',flush=True)
         second_path.unlink();time.sleep(1)
         print('PASS original Key unavailable rejects, restored Key resumes same conversation',flush=True)
         # State survives a configuration reload, without altering the other provider's routing.

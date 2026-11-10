@@ -3,17 +3,30 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/UangSC/cpa-agentrouter-continuity/internal/sdk"
 	"net/http"
+	"sync"
 )
 
 type httpStart struct {
 	Status   int         `json:"status_code"`
 	Headers  http.Header `json:"headers"`
 	StreamID string      `json:"stream_id"`
+	closeFn  func()
+}
+
+func (s httpStart) close() {
+	if s.closeFn != nil {
+		s.closeFn()
+	} else {
+		closeHTTP(s.StreamID)
+	}
+}
+
+func readResponse(s httpStart) ([]byte, error) {
+	defer s.close()
+	return readPayload(s.StreamID)
 }
 
 type httpChunk struct {
@@ -48,6 +61,16 @@ func upstreamHeaders(c credential, q execution) http.Header {
 func startHTTP(q execution, c credential, body []byte, path string) (httpStart, error) {
 	var s httpStart
 	err := hostCall("host.http.do_stream", map[string]any{"host_callback_id": q.CallbackID, "method": "POST", "url": "https://agentrouter.org/v1/" + path, "headers": upstreamHeaders(c, q), "body": body}, &s)
+	if err == nil && s.StreamID != "" {
+		id := s.StreamID
+		var once sync.Once
+		closeStream := func() { once.Do(func() { closeHTTP(id) }) }
+		s.closeFn = closeStream
+		if q.ctx != nil {
+			stop := context.AfterFunc(q.ctx, closeStream)
+			s.closeFn = func() { stop(); closeStream() }
+		}
+	}
 	return s, err
 }
 
@@ -68,6 +91,10 @@ func readHTTP(id string) (httpChunk, error) {
 
 func readAll(id string) ([]byte, error) {
 	defer closeHTTP(id)
+	return readPayload(id)
+}
+
+func readPayload(id string) ([]byte, error) {
 	var b bytes.Buffer
 	for {
 		c, e := readHTTP(id)
@@ -87,91 +114,3 @@ func readAll(id string) ([]byte, error) {
 func safeError(status int, raw []byte, secrets ...string) *rpcError {
 	return safeErrorWithCause(status, raw, nil, secrets...)
 }
-
-func runJSON(ctx context.Context, q execution, c credential, body []byte) ([]byte, error) {
-	requests.Add(1)
-	ctx, record := beginRecord(ctx, q, c)
-	outcome, reason := "failed", "upstream_error"
-	defer func() { finishRecord(record, outcome, reason) }()
-	b := newBudget(c)
-	for {
-		recordAttempt(record)
-		s, err := startHTTP(q, c, body, "responses")
-		var raw []byte
-		if err == nil {
-			raw, err = readAll(s.StreamID)
-		}
-		if e := pricingFailure(s.Status, raw, err, c.APIKey); e != nil {
-			failures.Add(1)
-			reason = e.Code
-			return nil, e
-		}
-		if err == nil && s.Status >= 200 && s.Status < 300 && classify(s.Status, raw) == "" {
-			if e := incompleteError(raw); e != nil {
-				failures.Add(1)
-				reason = e.Code
-				return nil, e
-			}
-			if b.used > 0 {
-				recovered.Add(1)
-			}
-			outcome = "completed"
-			reason = ""
-			recordUsage(record, raw)
-			if q.toolNamespaceAliased {
-				raw, _ = rewriteToolNames(raw, collaborationAlias, "collaboration")
-			}
-			return raw, nil
-		}
-		kind := failureKind(s.Status, raw, err)
-		if !b.retry(ctx, kind, s.Headers) {
-			failures.Add(1)
-			e := safeErrorWithCause(s.Status, raw, err, c.APIKey)
-			reason = e.Code
-			return nil, e
-		}
-	}
-}
-
-func compact(q execution, c credential) (any, error) {
-	model, e := modelForCredential(c, q.Model)
-	if e != nil {
-		return nil, e
-	}
-	var body map[string]json.RawMessage
-	if json.Unmarshal(q.Payload, &body) != nil || body == nil {
-		return nil, &rpcError{"invalid_request", "Expected compact JSON object", 400}
-	}
-	body["model"], _ = json.Marshal(model)
-	payload, e := json.Marshal(body)
-	if e != nil {
-		return nil, e
-	}
-	payload, q.toolNamespaceAliased, e = aliasRequestTools(payload)
-	if e != nil {
-		return nil, e
-	}
-	s, e := startHTTP(q, c, payload, "responses/compact")
-	if e != nil {
-		if failure := pricingFailure(s.Status, nil, e, c.APIKey); failure != nil {
-			return nil, failure
-		}
-		return nil, e
-	}
-	raw, e := readAll(s.StreamID)
-	if failure := pricingFailure(s.Status, raw, e, c.APIKey); failure != nil {
-		return nil, failure
-	}
-	if e != nil {
-		return nil, e
-	}
-	if s.Status >= 400 {
-		return nil, safeError(s.Status, raw, c.APIKey)
-	}
-	if q.toolNamespaceAliased {
-		raw, _ = rewriteToolNames(raw, collaborationAlias, "collaboration")
-	}
-	return sdk.ExecutorResponse{Payload: raw}, nil
-}
-
-// frameReader reconstructs SSE frames without assuming TCP chunk boundaries.

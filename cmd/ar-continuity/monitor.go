@@ -15,6 +15,7 @@ type requestRecord struct {
 	StartedAt     time.Time   `json:"started_at"`
 	DurationMS    int64       `json:"duration_ms"`
 	FirstOutputMS int64       `json:"first_output_ms"`
+	QueueWaitMS   int64       `json:"queue_wait_ms"`
 	Status        string      `json:"status"`
 	ErrorCode     string      `json:"error_code,omitempty"`
 	Attempts      int         `json:"attempts"`
@@ -46,6 +47,17 @@ func recordAttempt(r *requestRecord) {
 	r.Attempts++
 	r.Status = "waiting"
 }
+func recordQueued(r *requestRecord) {
+	monitor.mu.Lock()
+	defer monitor.mu.Unlock()
+	r.Status = "queued"
+}
+func recordDequeued(r *requestRecord) {
+	monitor.mu.Lock()
+	defer monitor.mu.Unlock()
+	r.QueueWaitMS = time.Since(r.StartedAt).Milliseconds()
+	r.Status = "waiting"
+}
 func recordOutput(r *requestRecord) {
 	monitor.mu.Lock()
 	defer monitor.mu.Unlock()
@@ -67,6 +79,9 @@ func recordRetry(ctx context.Context, reason string) {
 func finishRecord(r *requestRecord, status, code string) {
 	monitor.mu.Lock()
 	defer monitor.mu.Unlock()
+	if r.Status == "queued" {
+		r.QueueWaitMS = time.Since(r.StartedAt).Milliseconds()
+	}
 	r.Status = status
 	r.ErrorCode = code
 	r.DurationMS = time.Since(r.StartedAt).Milliseconds()

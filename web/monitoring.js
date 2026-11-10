@@ -40,11 +40,11 @@ function renderMonitor() {
  setMarkup('monitor-orb',icon(window.rate===null?'activity':tone==='good'?'check':'activity'));
  $('monitor-label').textContent=!credentials.length?'等待添加 API Key':!enabled?'所有凭证已停用':label;
  $('monitor-caption').textContent=`${enabled} 个已启用 Key · ${active.length} 个进行中${window.rate===null?'':' · 完成率 '+rateLabel(window.rate)}`;
- const counts=[active.filter(r=>r.status==='streaming').length,active.filter(r=>r.status==='waiting').length,active.filter(r=>r.status==='retrying').length,window.total.failed+window.total.incomplete];
+ const counts=[active.filter(r=>r.status==='streaming').length,active.filter(r=>['queued','waiting'].includes(r.status)).length,active.filter(r=>r.status==='retrying').length,window.total.failed+window.total.incomplete];
  setMarkup('signal-grid',counts.map((n,i)=>`<div class="signal"><i class="signal-lamp ${['blue','neutral','amber','red'][i]}"></i><span>${['输出中','等待上游','内部重试','近期异常'][i]}</span><strong>${count(n)}</strong></div>`).join(''));
  setMarkup('monitor-keys',credentials.length?credentials.map(c=>{
   const w=statusWindow(overview,c.id);
-  return `<div class="key-monitor"><div class="key-identity"><span class="key-icon">${icon('tokens')}</span><div><strong title="${esc(c.label)}">${esc(c.label)}</strong><small>${c.disabled?'已停用':'已启用'} · ${c.active_sessions>=0?c.active_sessions:'—'} / ${c.max_concurrent_sessions??2} 会话${w.partial?' · 保留日志':''}</small></div></div>${statusBlocks(w)}<span class="key-rate ${rateTone(w.rate)}">${rateLabel(w.rate)}</span></div>`;
+  return `<div class="key-monitor"><div class="key-identity"><span class="key-icon">${icon('tokens')}</span><div><strong title="${esc(c.label)}">${esc(c.label)}</strong><small>${c.disabled?'已停用':'已启用'} · ${c.active_requests>=0?c.active_requests:'—'} / ${c.max_concurrent_requests??c.max_concurrent_sessions??2} 请求 · 排队 ${c.queued_requests>=0?c.queued_requests:'—'}${w.partial?' · 保留日志':''}</small></div></div>${statusBlocks(w)}<span class="key-rate ${rateTone(w.rate)}">${rateLabel(w.rate)}</span></div>`;
  }).join(''):'<div class="monitor-empty">暂无 API Key<button class="text-button" data-open-tab="credentials">添加 API Key →</button></div>');
 }
 function logRecords(snapshot) {
@@ -52,14 +52,14 @@ function logRecords(snapshot) {
 }
 function filterLogRecords(rows,{query='',status='all',key='all'}={}) {
  const text=query.trim().toLowerCase();
- return rows.filter(r=>(key==='all'||r.credential_id===key)&&(status==='all'||status==='active'&&['waiting','streaming','retrying'].includes(r.status)||status==='recovered'&&r.status==='completed'&&r.attempts>1||r.status===status)&&[r.id,r.model,labelFor(r.credential_id),stateNames[r.status],r.error_code,...(r.retry_reasons||[])].join(' ').toLowerCase().includes(text));
+ return rows.filter(r=>(key==='all'||r.credential_id===key)&&(status==='all'||status==='active'&&['queued','waiting','streaming','retrying'].includes(r.status)||status==='recovered'&&r.status==='completed'&&r.attempts>1||r.status===status)&&[r.id,r.model,labelFor(r.credential_id),stateNames[r.status],r.error_code,...(r.retry_reasons||[])].join(' ').toLowerCase().includes(text));
 }
 function summaryCard(label,value,note,iconName,tone='blue') {
  return `<article class="card summary-card"><span class="summary-icon ${tone}">${icon(iconName)}</span><div><span>${label}</span><strong>${value}</strong><small>${note}</small></div></article>`;
 }
 function renderLogs() {
  if(!overview)return;
- const all=logRecords(overview),finished=all.filter(r=>!['waiting','streaming','retrying'].includes(r.status));
+ const all=logRecords(overview),finished=all.filter(r=>!['queued','waiting','streaming','retrying'].includes(r.status));
  const selected=$('log-key').value;
  const options=[...new Map([...credentials.map(c=>[c.id,c.label]),...all.filter(r=>!credentials.some(c=>c.id===r.credential_id)).map(r=>[r.credential_id,'已移除的 API Key'])]).entries()];
  setMarkup('log-key','<option value="all">全部 API Key</option>'+options.map(([id,label])=>`<option value="${esc(id)}">${esc(label)}</option>`).join(''));
@@ -78,7 +78,7 @@ function renderLogs() {
 function renderRequestDetail() {
  const r=detailRecord;if(!r)return;
  $('detail-request-id').textContent='#'+r.id;
- const fields=[['模型',r.model],['API Key',labelFor(r.credential_id)],['开始时间',timestamp(r.started_at)],['首段延迟',duration(r.first_output_ms)],['总耗时',duration(r.duration_ms)],['上游尝试',count(r.attempts)+' 次']];
+ const fields=[['模型',r.model],['API Key',labelFor(r.credential_id)],['开始时间',timestamp(r.started_at)],['首段延迟',duration(r.first_output_ms)],['总耗时',duration(r.duration_ms)],['并发排队',duration(r.queue_wait_ms||0)],['上游尝试',count(r.attempts)+' 次']];
  setMarkup('request-detail-body',`<div class="detail-status"><span class="pill ${statusClass(r.status)}">${esc(stateNames[r.status]||r.status)}</span>${r.status==='completed'&&r.attempts>1?'<span class="recovery-note">内部重试后完成</span>':''}</div><dl class="request-facts">${fields.map(([k,v])=>`<div><dt>${k}</dt><dd>${esc(v||'—')}</dd></div>`).join('')}</dl><section class="detail-section"><h3>内部恢复记录</h3>${r.retry_reasons?.length?`<ol class="retry-timeline">${r.retry_reasons.map((reason,i)=>`<li><span>${i+1}</span><div><strong>${esc(reasonNames[reason]||reason)}</strong><small>第 ${i+1} 次额外尝试前的重试原因</small></div></li>`).join('')}</ol>`:'<p>未记录内部重试。</p>'}</section>${r.error_code?`<section class="detail-section"><h3>错误码</h3><code class="error-detail">${esc(r.error_code)}</code></section>`:''}`);
 }
 function renderHealth() {
@@ -91,7 +91,7 @@ function renderHealth() {
   return `<article class="card connection-card"><div class="connection-heading"><div class="key-identity"><span class="key-icon">${icon('tokens')}</span><div><strong title="${esc(c.label)}">${esc(c.label)}</strong><small class="mono">${esc(c.masked_key)}</small></div></div><span class="pill ${c.disabled?'':'good'}">${c.disabled?'已停用':'已启用'}</span></div><div class="connection-performance"><span>近期请求完成率</span><strong class="${rateTone(w.rate)}">${rateLabel(w.rate)}</strong></div>${statusBlocks(w)}<div class="connection-counts"><span>${count(w.total.completed)} 完成</span><span>${count(w.total.failed)} 失败</span><span>${count(w.total.incomplete)} 未完整</span></div><div class="connection-check"><div><span>模型列表连接检测</span><strong class="${check?(check.ok?'text-good':'text-bad'):'muted'}">${check?(check.ok?'检测通过':'检测失败'):'尚未检测'}</strong></div><p>${check?esc(timestamp(check.checked_at))+' · '+duration(check.latency_ms)+(check.http_status?' · HTTP '+Number(check.http_status):''):'手动检测后显示结果与响应耗时'}</p>${check?`<p class="check-message">${esc(check.message)}</p>`:''}</div><div class="connection-actions"><span>${w.partial?'仅覆盖保留日志':'最近 20 个时段 · 每格 10 分钟'}</span><button data-health="${esc(c.auth_index)}" ${pending?'disabled':''}>${pending?'检测中…':'检测连接'}</button></div></article>`;
  }).join(''):'<div class="card visual-empty"><strong>暂无 API Key</strong><p>添加凭证后，可查看连接状态与请求表现。</p><button class="text-button" data-open-tab="credentials">添加 API Key →</button></div>');
  $('policy-empty').hidden=credentials.length>0;
- setMarkup('policy-rows',credentials.map(c=>`<tr><td><strong>${esc(c.label)}</strong><small>${c.disabled?'已停用':'已启用'}</small></td><td class="mono">${c.active_sessions>=0?c.active_sessions:'—'} / ${c.max_concurrent_sessions??2}</td><td>${c.max_retries??4} 次</td><td>${c.retry_budget_seconds??180} 秒</td><td>${esc(c.model_prefix||'无前缀')}</td><td class="right"><button class="text-button" data-policy="${esc(c.auth_index)}">编辑配置 →</button></td></tr>`).join(''));
+ setMarkup('policy-rows',credentials.map(c=>`<tr><td><strong>${esc(c.label)}</strong><small>${c.disabled?'已停用':'已启用'}</small></td><td class="mono">${c.active_requests>=0?c.active_requests:'—'} / ${c.max_concurrent_requests??c.max_concurrent_sessions??2}</td><td class="mono">${c.queued_requests>=0?c.queued_requests:'—'}</td><td>${c.max_retries??4} 次</td><td>${c.retry_budget_seconds??180} 秒</td><td>${esc(c.model_prefix||'无前缀')}</td><td class="right"><button class="text-button" data-policy="${esc(c.auth_index)}">编辑配置 →</button></td></tr>`).join(''));
 }
 async function runHealthCheck(index) {
  if(pendingChecks.has(index))return;const epoch=generation;

@@ -10,9 +10,12 @@
 | --- | --- |
 | `main.go`、`abi.go`、`plugin.go` | 默认入口、C ABI 内存边界、插件注册与宿主调用分发 |
 | `credential.go`、`models.go`、`management.go` | AR 凭证范围、模型配置、鉴权管理接口及资源响应 |
-| `transport.go`、`stream.go`、`retry.go` | 宿主 HTTP 回调、JSON/SSE 生命周期、重试预算和交付边界 |
+| `executor.go`、`execution_lifecycle.go` | 执行入口、请求取消和预约释放 |
+| `transport.go`、`json.go`、`sse.go`、`stream.go`、`retry.go` | HTTP 回调、JSON 错误校验、SSE 帧解析、流式交付与重试 |
 | `error_details.go`、`pricing_error.go` | 上游错误分类、历史校验与计费故障诊断 |
-| `routing.go`、`routing_store.go` | 会话来源、名额准入和持久化状态 |
+| `session_identity.go`、`session_relations.go` | 显式会话身份、单轮探测判定与父子关系 |
+| `admission.go`、`scheduler.go` | 请求准入、临时探测预约、来源保护和固定 Key 选择 |
+| `routing_store.go`、`routing_metrics.go`、`execution_queue.go` | 持久化、诊断计数与 Key 请求排队 |
 | `routing_lock_*.go`、`process_identity_*.go` | 各平台文件锁与进程身份 |
 | `monitor.go`、`analytics.go` | 脱敏请求元数据、Key / 模型时间分桶与数字用量 |
 | `channel_pricing.go` | 固定公开渠道接口、默认分组 Token 单价换算 |

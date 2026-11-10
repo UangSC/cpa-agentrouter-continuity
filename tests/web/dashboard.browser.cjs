@@ -57,7 +57,17 @@ async function main() {
   await page.reload();await page.waitForSelector('.heat-cell');
   await page.locator('[data-rank="cost"]').click();assert.match(await page.locator('#rank-total').innerText(),/已计价 \$/);
   await page.locator('[data-tab="credentials"]').click();await page.locator('#add-key').click();
-  assert.equal(await page.locator('#field-concurrency').inputValue(),'2');
+  assert.equal(await page.locator('#field-concurrency').count(),0);
+  assert.equal(await page.locator('#field-request-concurrency').inputValue(),'2');
+  assert.equal(await page.locator('#field-session-concurrency').count(),0);
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  await page.screenshot({path:path.join(output,'concurrency-editor-mobile.png'),fullPage:true});
+  await page.setViewportSize({width:1440,height:1000});
+  await page.screenshot({path:path.join(output,'concurrency-editor-light.png'),fullPage:true});
+  await page.evaluate(()=>{localStorage.setItem('cli-proxy-theme',JSON.stringify({state:{theme:'dark'}}));applyTheme();});
+  await page.screenshot({path:path.join(output,'concurrency-editor-dark.png'),fullPage:true});
+  await page.evaluate(()=>{localStorage.setItem('cli-proxy-theme',JSON.stringify({state:{theme:'white'}}));applyTheme();});
   await page.locator('#cancel-editor').click();
   await page.locator('[data-tab="logs"]').click();assert.equal(await page.locator('#log-rows tr').count(),20);
   await page.locator('#log-search').fill('failed-model-no-match');assert.equal(await page.locator('#log-empty').isVisible(),true);

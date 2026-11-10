@@ -34,8 +34,10 @@ type credentialView struct {
 	Headers               map[string]string `json:"headers"`
 	MaxRetries            int               `json:"max_retries"`
 	RetryBudgetSeconds    int               `json:"retry_budget_seconds"`
-	MaxConcurrentSessions int               `json:"max_concurrent_sessions"`
+	MaxConcurrentRequests int               `json:"max_concurrent_requests"`
 	ActiveSessions        int               `json:"active_sessions"`
+	ActiveRequests        int               `json:"active_requests"`
+	QueuedRequests        int               `json:"queued_requests"`
 	Health                string            `json:"health"`
 }
 type healthResult struct {
@@ -99,7 +101,7 @@ func managementHandle(raw []byte) (any, error) {
 			health[k] = v
 		}
 		healthMu.Unlock()
-		return jsonResponse(200, map[string]any{"version": version, "requests": requests.Load(), "retries": retries.Load(), "failures": failures.Load(), "recovered": recovered.Load(), "history_policy": "preserve-and-new-session", "logs": monitorSnapshot(), "routing": routingSnapshot(), "health": health, "defaults": map[string]any{"user_agent": defaultUserAgent, "originator": defaultOriginator, "max_retries": 4, "retry_budget_seconds": 180, "max_concurrent_sessions": defaultMaxConcurrentSessions}}), nil
+		return jsonResponse(200, map[string]any{"version": version, "requests": requests.Load(), "retries": retries.Load(), "failures": failures.Load(), "recovered": recovered.Load(), "history_policy": "preserve-and-new-session", "logs": monitorSnapshot(), "routing": routingSnapshot(), "health": health, "defaults": map[string]any{"user_agent": defaultUserAgent, "originator": defaultOriginator, "max_retries": 4, "retry_budget_seconds": 180, "max_concurrent_requests": defaultMaxConcurrentRequests}}), nil
 	case "GET /credentials":
 		entries, e := listOwnCredentials(q.CallbackID)
 		if e != nil {
@@ -107,13 +109,24 @@ func managementHandle(raw []byte) (any, error) {
 		}
 		views := []credentialView{}
 		activeByKey := map[string]int{}
+		runningByKey, queuedByKey := map[string]int{}, map[string]int{}
 		stateErr := withRoutingLedger(func(s *routingLedger) error {
 			for _, lease := range s.Leases {
 				if _, exists := activeByKey[lease.KeyHash]; !exists {
 					activeByKey[lease.KeyHash] = len(keySessions(s, lease.KeyHash))
 				}
 			}
-			return nil
+			return withExecutionLedger(func(executions *routingLedger) error {
+				for id, lease := range s.Leases {
+					tracked, exists := executions.Leases[id]
+					if lease.Running && (!exists || upstreamActive(tracked)) {
+						runningByKey[lease.KeyHash]++
+					} else {
+						queuedByKey[lease.KeyHash]++
+					}
+				}
+				return nil
+			})
 		})
 		for _, entry := range entries {
 			c, _, e := getOwnCredential(q.CallbackID, entry.AuthIndex)
@@ -138,10 +151,12 @@ func managementHandle(raw []byte) (any, error) {
 				state = "unavailable"
 			}
 			active := activeByKey[digest(c.APIKey)]
+			running, queued := runningByKey[digest(c.APIKey)], queuedByKey[digest(c.APIKey)]
 			if stateErr != nil {
 				active = -1
+				running, queued = -1, -1
 			}
-			views = append(views, credentialView{Index: entry.AuthIndex, ID: c.ID, Label: label, Name: entry.Name, MaskedKey: maskKey(c.APIKey), Disabled: entry.Disabled, Prefix: c.Prefix, Models: c.Models, Headers: map[string]string{"User-Agent": h.Get("User-Agent"), "Originator": h.Get("Originator")}, MaxRetries: n, RetryBudgetSeconds: sec, MaxConcurrentSessions: sessionLimit(c), ActiveSessions: active, Health: state})
+			views = append(views, credentialView{Index: entry.AuthIndex, ID: c.ID, Label: label, Name: entry.Name, MaskedKey: maskKey(c.APIKey), Disabled: entry.Disabled, Prefix: c.Prefix, Models: c.Models, Headers: map[string]string{"User-Agent": h.Get("User-Agent"), "Originator": h.Get("Originator")}, MaxRetries: n, RetryBudgetSeconds: sec, MaxConcurrentRequests: requestLimit(c), ActiveSessions: active, ActiveRequests: running, QueuedRequests: queued, Health: state})
 		}
 		return jsonResponse(200, map[string]any{"credentials": views}), nil
 	case "POST /credentials", "PUT /credentials":
@@ -214,7 +229,7 @@ type credentialEdit struct {
 	Originator            string          `json:"originator"`
 	MaxRetries            int             `json:"max_retries"`
 	RetryBudgetSeconds    int             `json:"retry_budget_seconds"`
-	MaxConcurrentSessions *int            `json:"max_concurrent_sessions"`
+	MaxConcurrentRequests *int            `json:"max_concurrent_requests"`
 }
 
 func saveManagedCredential(q managementRequest) sdk.ManagementResponse {
@@ -257,12 +272,16 @@ func saveManagedCredential(q managementRequest) sdk.ManagementResponse {
 	c.Prefix = strings.Trim(edit.Prefix, " /\t")
 	c.MaxRetries = &edit.MaxRetries
 	c.RetryBudgetSeconds = edit.RetryBudgetSeconds
-	if edit.MaxConcurrentSessions != nil {
-		if *edit.MaxConcurrentSessions < 1 || *edit.MaxConcurrentSessions > maximumConcurrentSessions {
-			return jsonResponse(400, map[string]string{"error": "并发会话上限必须为 1–100 的整数"})
+	if edit.MaxConcurrentRequests != nil {
+		if *edit.MaxConcurrentRequests < 1 || *edit.MaxConcurrentRequests > maximumConcurrentRequests {
+			return jsonResponse(400, map[string]string{"error": "请求并发上限必须为 1–100 的整数"})
 		}
-		c.MaxConcurrentSessions = edit.MaxConcurrentSessions
+		c.MaxConcurrentRequests = edit.MaxConcurrentRequests
+	} else {
+		limit := requestLimit(c)
+		c.MaxConcurrentRequests = &limit
 	}
+	c.MaxConcurrentSessions = nil
 	if c.Headers == nil {
 		c.Headers = map[string]string{}
 	}
@@ -308,7 +327,7 @@ func saveManagedCredential(q managementRequest) sdk.ManagementResponse {
 	encoded, _ := json.Marshal(c)
 	var fields map[string]json.RawMessage
 	_ = json.Unmarshal(encoded, &fields)
-	for _, name := range []string{"model_prefix", "label", "disabled", "headers", "max_retries", "retry_budget_seconds", "max_concurrent_sessions"} {
+	for _, name := range []string{"model_prefix", "label", "disabled", "headers", "max_retries", "retry_budget_seconds", "max_concurrent_sessions", "max_concurrent_requests", "max_concurrent_requests_per_session"} {
 		delete(merged, name)
 	}
 	for k, v := range fields {

@@ -23,6 +23,11 @@ type admissionLease struct {
 	RequestID string    `json:"request_id"`
 	Created   time.Time `json:"created"`
 	Running   bool      `json:"running"`
+	// Execution-only fields live in a separate file. Older loaded libraries
+	// rewrite routing records without retaining fields they do not understand.
+	Upstream            *bool `json:"upstream,omitempty"`
+	RequestLimit        int   `json:"request_limit,omitempty"`
+	SessionRequestLimit int   `json:"session_request_limit,omitempty"`
 }
 type routingLedger struct {
 	Process     string                    `json:"process"`
@@ -33,14 +38,25 @@ type routingLedger struct {
 
 var routingPath = filepath.Join("plugins", "cpa-agentrouter-continuity-sessions.json")
 var routingStoreMu sync.Mutex
+var executionStoreMu sync.Mutex
 
 func withRoutingLedger(fn func(*routingLedger) error) error {
 	routingStoreMu.Lock()
 	defer routingStoreMu.Unlock()
-	if e := os.MkdirAll(filepath.Dir(routingPath), 0700); e != nil {
+	return withLedgerFile(routingPath, fn)
+}
+
+func withExecutionLedger(fn func(*routingLedger) error) error {
+	executionStoreMu.Lock()
+	defer executionStoreMu.Unlock()
+	return withLedgerFile(routingPath+".executions", fn)
+}
+
+func withLedgerFile(path string, fn func(*routingLedger) error) error {
+	if e := os.MkdirAll(filepath.Dir(path), 0700); e != nil {
 		return e
 	}
-	lock, e := os.OpenFile(routingPath+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	lock, e := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
 	if e != nil {
 		return e
 	}
@@ -50,7 +66,7 @@ func withRoutingLedger(fn func(*routingLedger) error) error {
 	}
 	defer unlockRoutingFile(lock)
 	ledger := routingLedger{Origins: map[string]sessionOrigin{}, Leases: map[string]admissionLease{}}
-	raw, e := os.ReadFile(routingPath)
+	raw, e := os.ReadFile(path)
 	if e == nil {
 		if json.Unmarshal(raw, &ledger) != nil {
 			return fmt.Errorf("invalid routing state")
@@ -77,7 +93,7 @@ func withRoutingLedger(fn func(*routingLedger) error) error {
 	if e != nil {
 		return e
 	}
-	tmp, e := os.CreateTemp(filepath.Dir(routingPath), ".ar-session-*")
+	tmp, e := os.CreateTemp(filepath.Dir(path), ".ar-session-*")
 	if e != nil {
 		return e
 	}
@@ -93,5 +109,5 @@ func withRoutingLedger(fn func(*routingLedger) error) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	return os.Rename(name, routingPath)
+	return os.Rename(name, path)
 }

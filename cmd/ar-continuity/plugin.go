@@ -4,16 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"github.com/UangSC/cpa-agentrouter-continuity/internal/sdk"
-	"net/http"
-	"sync"
 	"sync/atomic"
 )
 
 const pluginID = "cpa-agentrouter-continuity"
 
-const version = "0.5.5"
+const version = "0.5.8"
 
 const maxBuffer = 8 << 20
 
@@ -44,13 +41,14 @@ type execution struct {
 	StreamID             string `json:"stream_id"`
 	CallbackID           string `json:"host_callback_id"`
 	toolNamespaceAliased bool
+	admitted             bool
+	release              func()
+	ctx                  context.Context
 }
 
 type hostFunc func(string, any, any) error
 
 var hostCall hostFunc = nativeHost
-
-var active sync.Map
 
 var requests, retries, recovered, failures atomic.Uint64
 
@@ -125,69 +123,7 @@ func handle(method string, raw []byte) (any, error) {
 		}
 		return sdk.AuthRefreshResponse{Auth: authData(c, q.StorageJSON, "")}, nil
 	case "executor.execute", "executor.execute_stream":
-		var q execution
-		if err := json.Unmarshal(raw, &q); err != nil {
-			return nil, err
-		}
-		if q.AuthProvider != pluginID {
-			return nil, &rpcError{"ar_scope_violation", "Credential is not owned by AR plugin", 400}
-		}
-		c, e := decodeCredential(q.StorageJSON)
-		if e != nil {
-			return nil, e
-		}
-		if c.Disabled {
-			return nil, &rpcError{"ar_disabled", "AR credential disabled", 403}
-		}
-		if q.Alt != "" && q.Alt != "responses/compact" {
-			return nil, &rpcError{"ar_unsupported_route", "Unsupported AR operation", 400}
-		}
-		if q.StreamID == "" && method == "executor.execute_stream" {
-			return nil, fmt.Errorf("stream ID missing")
-		}
-		if q.Alt == "responses/compact" {
-			release, e := acquireExecution(q, c)
-			if e != nil {
-				return nil, e
-			}
-			defer release()
-			return compact(q, c)
-		}
-		upstreamModel, e := modelForCredential(c, q.Model)
-		if e != nil {
-			return nil, e
-		}
-		body, e := prepareBody(q.Payload, upstreamModel, method == "executor.execute_stream")
-		if e != nil {
-			return nil, e
-		}
-		body, q.toolNamespaceAliased, e = aliasRequestTools(body)
-		if e != nil {
-			return nil, e
-		}
-		release, e := acquireExecution(q, c)
-		if e != nil {
-			return nil, e
-		}
-		if method == "executor.execute_stream" {
-			ctx, cancel := context.WithCancel(context.Background())
-			active.Store(q.StreamID, cancel)
-			go func() {
-				defer release()
-				defer active.Delete(q.StreamID)
-				defer cancel()
-				defer func() {
-					if recover() != nil {
-						_ = hostCall("host.stream.close", map[string]string{"stream_id": q.StreamID, "error": "AR plugin internal failure"}, nil)
-					}
-				}()
-				runStreaming(ctx, q, c, body)
-			}()
-			return map[string]any{"headers": http.Header{"Content-Type": {"text/event-stream"}, "Cache-Control": {"no-cache"}, "X-CPA-AgentRouter-Continuity-Version": {version}}}, nil
-		}
-		defer release()
-		result, err := runJSON(context.Background(), q, c, body)
-		return sdk.ExecutorResponse{Payload: result}, err
+		return executeRequest(method, raw)
 	case "executor.count_tokens", "executor.http_request", "auth.login_start", "auth.login_poll":
 		return nil, &rpcError{"ar_unsupported_operation", "Operation not implemented by AR continuity", 400}
 	case "management.register":
@@ -198,8 +134,6 @@ func handle(method string, raw []byte) (any, error) {
 		return nil, &rpcError{"unsupported_method", "Unsupported plugin method", 400}
 	}
 }
-
-func shutdown() { active.Range(func(_, v any) bool { v.(context.CancelFunc)(); return true }) }
 
 func prepareBody(raw []byte, model string, stream bool) ([]byte, error) {
 	var b map[string]json.RawMessage

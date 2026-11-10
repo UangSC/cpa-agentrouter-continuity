@@ -133,6 +133,9 @@ func nativeHost(method string, value any, result any) error {
 		return fmt.Errorf("host callback unavailable")
 	}
 	defer C.free_host_buffer(out.ptr, out.len)
+	if out.len > 128<<20 {
+		return fmt.Errorf("host callback response exceeds buffer limit")
+	}
 	var e envelope
 	if err = json.Unmarshal(C.GoBytes(out.ptr, C.int(out.len)), &e); err != nil {
 		return err

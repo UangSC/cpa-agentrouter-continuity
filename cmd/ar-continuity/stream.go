@@ -11,57 +11,6 @@ import (
 	"time"
 )
 
-type frameReader struct{ pending []byte }
-
-func (f *frameReader) feed(p []byte) ([][]byte, error) {
-	f.pending = append(f.pending, p...)
-	if len(f.pending) > maxBuffer {
-		return nil, fmt.Errorf("SSE frame too large")
-	}
-	var frames [][]byte
-	for {
-		i := bytes.Index(f.pending, []byte("\n\n"))
-		j := bytes.Index(f.pending, []byte("\r\n\r\n"))
-		n := 2
-		if j >= 0 && (i < 0 || j < i) {
-			i = j
-			n = 4
-		}
-		if i < 0 {
-			break
-		}
-		frames = append(frames, bytes.Clone(f.pending[:i+n]))
-		f.pending = f.pending[i+n:]
-	}
-	return frames, nil
-}
-
-func eventData(frame []byte) []byte {
-	var rows [][]byte
-	for _, l := range bytes.Split(frame, []byte("\n")) {
-		l = bytes.TrimSuffix(l, []byte("\r"))
-		if bytes.HasPrefix(l, []byte("data:")) {
-			rows = append(rows, bytes.TrimPrefix(l[5:], []byte(" ")))
-		}
-	}
-	return bytes.Join(rows, []byte("\n"))
-}
-
-func eventType(data []byte) string {
-	var v struct{ Type string }
-	_ = json.Unmarshal(data, &v)
-	return v.Type
-}
-
-func meaningful(kind string, data []byte) bool {
-	switch kind {
-	case "response.created", "response.in_progress", "response.queued":
-		return false
-	}
-	// Unknown events may contain content or tool effects: commit conservatively.
-	return len(data) > 0 && string(data) != "[DONE]"
-}
-
 func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 	requests.Add(1)
 	ctx, record := beginRecord(ctx, q, c)
@@ -69,6 +18,7 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 	defer func() { finishRecord(record, outcome, reason) }()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	q.ctx = ctx
 	var emitMu sync.Mutex
 	emit := func(p []byte) error {
 		emitMu.Lock()
@@ -100,6 +50,9 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 	defer close(done)
 	defer func() { _ = hostCall("host.stream.close", map[string]string{"stream_id": q.StreamID}, nil) }()
 	terminal := func(e *rpcError) {
+		if q.release != nil {
+			q.release()
+		}
 		if ctx.Err() != nil {
 			outcome = "canceled"
 			reason = "client_disconnected"
@@ -110,6 +63,14 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 		v := map[string]any{"type": "response.failed", "response": map[string]any{"status": "failed", "error": map[string]any{"code": e.Code, "message": strings.ReplaceAll(e.Message, c.APIKey, "[REDACTED]"), "type": errorType(e.HTTPStatus), "http_status": e.HTTPStatus}}}
 		d, _ := json.Marshal(v)
 		_ = emit(append(append([]byte("event: response.failed\ndata: "), d...), []byte("\n\n")...))
+	}
+	if q.admitted {
+		recordQueued(record)
+		if err := waitExecutionSlot(ctx, q, c); err != nil {
+			terminal(asRPCError(err))
+			return
+		}
+		recordDequeued(record)
 	}
 	b := newBudget(c)
 	for ctx.Err() == nil {
@@ -132,7 +93,7 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 			return
 		}
 		if s.Status < 200 || s.Status >= 300 {
-			raw, err := readAll(s.StreamID)
+			raw, err := readResponse(s)
 			if failure := pricingFailure(s.Status, raw, err, c.APIKey); failure != nil {
 				terminal(failure)
 				return
@@ -145,7 +106,7 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 			return
 		}
 		if !strings.Contains(strings.ToLower(s.Headers.Get("Content-Type")), "text/event-stream") {
-			raw, readErr := readAll(s.StreamID)
+			raw, readErr := readResponse(s)
 			if b.retry(ctx, classify(502, raw), s.Headers) {
 				continue
 			}
@@ -204,11 +165,16 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 						attemptErr = fmt.Errorf("upstream failed")
 						break
 					}
-					_ = emit(f)
+					// Even after output, error details can echo runtime credentials.
+					// Emit one sanitized terminal failure without replaying content.
+					terminal(safeError(502, d, c.APIKey))
 					completed = true
-					reason = "upstream_stream_error"
-					failures.Add(1)
 					break
+				}
+				// Terminal frames can reach the client before stream_close returns.
+				// Free capacity first so its next request does not observe a stale slot.
+				if (t == "response.completed" || t == "response.incomplete") && q.release != nil {
+					q.release()
 				}
 				if !committed {
 					pending.Write(f)
@@ -252,12 +218,13 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 				break
 			}
 		}
-		closeHTTP(s.StreamID)
-		if ctx.Err() != nil || completed {
-			if ctx.Err() != nil {
-				outcome = "canceled"
-				reason = "client_disconnected"
-			}
+		s.close()
+		if completed {
+			return
+		}
+		if ctx.Err() != nil {
+			outcome = "canceled"
+			reason = "client_disconnected"
 			return
 		}
 		if terminalFailure == nil {

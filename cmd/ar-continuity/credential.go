@@ -23,16 +23,21 @@ type credential struct {
 	MaxRetries            *int              `json:"max_retries,omitempty"`
 	RetryBudgetSeconds    int               `json:"retry_budget_seconds,omitempty"`
 	MaxConcurrentSessions *int              `json:"max_concurrent_sessions,omitempty"`
+	MaxConcurrentRequests *int              `json:"max_concurrent_requests,omitempty"`
 }
 
-const defaultMaxConcurrentSessions = 2
-const maximumConcurrentSessions = 100
+const defaultMaxConcurrentRequests = 2
+const maximumConcurrentRequests = 100
 
-func sessionLimit(c credential) int {
+// Legacy session caps seed the request cap once; they no longer gate sessions.
+func requestLimit(c credential) int {
+	if c.MaxConcurrentRequests != nil {
+		return *c.MaxConcurrentRequests
+	}
 	if c.MaxConcurrentSessions != nil {
 		return *c.MaxConcurrentSessions
 	}
-	return defaultMaxConcurrentSessions
+	return defaultMaxConcurrentRequests
 }
 
 const defaultUserAgent = "codex_exec/0.159.3 (Windows 10.0.19045; x86_64) dumb (codex_exec; 0.159.3)"
@@ -74,8 +79,8 @@ func validateCredential(c credential) error {
 	if c.RetryBudgetSeconds < 0 || c.RetryBudgetSeconds > 600 {
 		return fmt.Errorf("retry budget must be between 0 and 600 seconds")
 	}
-	if n := sessionLimit(c); n < 1 || n > maximumConcurrentSessions {
-		return fmt.Errorf("并发会话上限必须为 1–%d 的整数", maximumConcurrentSessions)
+	if n := requestLimit(c); n < 1 || n > maximumConcurrentRequests {
+		return fmt.Errorf("请求并发上限必须为 1–%d 的整数", maximumConcurrentRequests)
 	}
 	return nil
 }
@@ -91,7 +96,7 @@ func decodeCredential(raw []byte) (credential, error) {
 
 func authData(c credential, raw []byte, file string) sdk.AuthData {
 	return sdk.AuthData{Provider: pluginID, ID: c.ID, FileName: file, Label: credentialLabel(c), Disabled: c.Disabled, StorageJSON: raw,
-		Metadata: map[string]any{"type": pluginID, "request_retry": 0}, Attributes: map[string]string{"ar_base_url": c.BaseURL, "ar_key_hash": digest(c.APIKey), "ar_max_concurrent_sessions": strconv.Itoa(sessionLimit(c))}}
+		Metadata: map[string]any{"type": pluginID, "request_retry": 0}, Attributes: map[string]string{"ar_base_url": c.BaseURL, "ar_key_hash": digest(c.APIKey), "ar_max_concurrent_requests": strconv.Itoa(requestLimit(c))}}
 }
 
 func modelForCredential(c credential, requested string) (string, error) {

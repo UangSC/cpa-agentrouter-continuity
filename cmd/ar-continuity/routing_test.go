@@ -150,8 +150,8 @@ func TestHarnessAdmissionContinuationAndForeignProtection(t *testing.T) {
 		}
 	}
 	picked, _ = route("slot-third", "harness-slot-three", false, ar)
-	if !picked.Reject {
-		t.Fatal("DSH exceeded the per-Key concurrent session limit")
+	if picked.Reject || picked.AuthID != ar.ID {
+		t.Fatal("identified DSH session should queue, not be rejected", picked)
 	}
 }
 func TestExistingForeignAndUnidentifiedHistoryNeverEnterAR(t *testing.T) {
@@ -164,9 +164,10 @@ func TestExistingForeignAndUnidentifiedHistoryNeverEnterAR(t *testing.T) {
 		}
 	}
 	picked, _ := routeRequest("missing", "", true, ar, otherCandidate())
-	if picked.AuthID != "other" {
-		t.Fatal("missing session admitted")
+	if picked.AuthID != "ar" {
+		t.Fatal("clean anonymous first turn should use a transient reservation")
 	}
+	completeAdmission(sdk.RequestCompletion{RequestID: "missing"})
 	picked, _ = routeRequest("alone", "old3", false, ar)
 	if !picked.Reject {
 		t.Fatal("AR-only old request should reject")
@@ -176,84 +177,61 @@ func TestExistingForeignAndUnidentifiedHistoryNeverEnterAR(t *testing.T) {
 		t.Fatal("dropping history changed origin")
 	}
 }
-func TestTwoActiveSessionsAndRelease(t *testing.T) {
+func TestMultipleSessionsQueueWithoutProviderFallback(t *testing.T) {
 	routeFixture(t)
-	ar := arCandidate("ar", "mock-secret", 10)
-	releases := []func(){}
-	for _, s := range []string{"s1", "s2"} {
-		p, q := routeRequest(s, s, true, ar, otherCandidate())
-		if p.AuthID != "ar" {
-			t.Fatal(p)
-		}
-		release, e := acquireExecution(q, testCredential())
-		if e != nil {
-			t.Fatal(e)
-		}
-		releases = append(releases, release)
+	a, ra := reserveQueued(t, "a", "a", "mock-secret", 2)
+	defer ra()
+	b, rb := reserveQueued(t, "b", "b", "mock-secret", 2)
+	defer rb()
+	c, rc := reserveQueued(t, "c", "c", "mock-secret", 2)
+	defer rc()
+	if claimExecutionSlot(a) != nil || claimExecutionSlot(b) != nil {
+		t.Fatal("first requests not started")
 	}
-	p, _ := routeRequest("r3", "s3", true, ar, otherCandidate())
-	if p.AuthID != "other" {
-		t.Fatal("third session exceeded cap", p)
+	if claimExecutionSlot(c) != errExecutionBusy {
+		t.Fatal("third request did not queue")
 	}
-	releases[0]()
-	p, _ = routeRequest("r4", "s4", true, ar, otherCandidate())
-	if p.AuthID != "ar" {
-		t.Fatal("slot not released", p)
+	ra()
+	if claimExecutionSlot(c) != nil {
+		t.Fatal("request did not resume after release")
 	}
-	p, _ = routeRequest("r5", "s3", false, ar, otherCandidate())
-	if p.AuthID != "other" {
-		t.Fatal("fallback conversation entered AR")
-	}
-	releases[1]()
 }
+
 func TestSameSessionRequestsReleaseOnlyTheirOwnLeases(t *testing.T) {
 	routeFixture(t)
-	ar := arCandidate("ar", "mock-secret", 10)
-	_, q1 := routeRequest("r1", "s1", true, ar)
-	_, q2 := routeRequest("r2", "s1", false, ar)
-	r1, e := acquireExecution(q1, testCredential())
-	if e != nil {
-		t.Fatal(e)
+	a, ra := reserveQueued(t, "a", "same", "mock-secret", 2)
+	defer ra()
+	b, rb := reserveQueued(t, "b", "same", "mock-secret", 2)
+	defer rb()
+	if claimExecutionSlot(a) != nil || claimExecutionSlot(b) != nil {
+		t.Fatal("per-session cap is still enforced")
 	}
-	r2, e := acquireExecution(q2, testCredential())
-	if e != nil {
-		t.Fatal(e)
-	}
-	p, _ := routeRequest("r3", "s2", true, ar)
-	if p.AuthID != "ar" {
-		t.Fatal("same session counted twice")
-	}
-	r1()
-	completeAdmission(sdk.RequestCompletion{RequestID: "r1"})
-	p, _ = routeRequest("r4", "s3", true, ar, otherCandidate())
-	if p.AuthID != "other" {
-		t.Fatal("in-flight same-session lease lost")
-	}
-	r2()
-	p, _ = routeRequest("r5", "s4", true, ar)
-	if p.AuthID != "ar" {
-		t.Fatal("last same-session lease not released")
-	}
+	ra()
+	completeAdmission(sdk.RequestCompletion{RequestID: "a"})
+	_ = withExecutionLedger(func(s *routingLedger) error {
+		if len(s.Leases) != 1 || !upstreamActive(s.Leases["b"]) {
+			t.Fatal("released someone else's slot")
+		}
+		return nil
+	})
 }
-func TestDuplicateCredentialsShareKeyCapacity(t *testing.T) {
+
+func TestDuplicateCredentialsCanAdmitButShareExecutionQueue(t *testing.T) {
 	routeFixture(t)
 	a := arCandidate("ar-a", "mock-secret", 10)
 	b := arCandidate("ar-b", "mock-secret", 10)
-	for _, s := range []string{"one", "two"} {
-		p, _ := routeRequest(s, s, true, a)
-		if p.AuthID != "ar-a" {
-			t.Fatal(p)
+	for _, id := range []string{"one", "two", "three"} {
+		picked, _ := routeRequest(id, id, true, a, b, otherCandidate())
+		if picked.Reject || picked.AuthID == "other" {
+			t.Fatal("request capacity must be enforced at execution", picked)
 		}
 	}
-	p, _ := routeRequest("third", "three", true, b, otherCandidate())
-	if p.AuthID != "other" {
-		t.Fatal("duplicate credential bypass")
-	}
 }
+
 func TestDifferentKeyHasSeparateCapacity(t *testing.T) {
 	routeFixture(t)
 	a := arCandidate("ar-a", "mock-secret", 10)
-	b := arCandidate("ar-b", "mock-second", 5)
+	b := arCandidate("ar-b", "mock-second", 10)
 	routeRequest("1", "1", true, a)
 	routeRequest("2", "2", true, a)
 	p, _ := routeRequest("3", "3", true, a, b, otherCandidate())
@@ -261,7 +239,7 @@ func TestDifferentKeyHasSeparateCapacity(t *testing.T) {
 		t.Fatal(p)
 	}
 }
-func TestConcurrentAdmissionNeverOversubscribes(t *testing.T) {
+func TestConcurrentAdmissionKeepsIdentifiedSessionsInAR(t *testing.T) {
 	routeFixture(t)
 	ar := arCandidate("ar", "mock-secret", 10)
 	var wg sync.WaitGroup
@@ -281,7 +259,7 @@ func TestConcurrentAdmissionNeverOversubscribes(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	if count != 2 {
+	if count != 20 {
 		t.Fatalf("admitted %d sessions", count)
 	}
 }
