@@ -10,7 +10,7 @@ import (
 
 const pluginID = "cpa-agentrouter-continuity"
 
-const version = "0.5.11"
+const version = "0.6.0"
 
 const maxBuffer = 8 << 20
 

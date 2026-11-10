@@ -20,7 +20,7 @@ python3 scripts/check_release.py --git .
 隔离集成测试需要 Python 3、PyYAML、OpenSSL、curl 和 CPA 可执行文件。测试自建临时目录、mock 凭证与 TLS 上游，不读取生产配置或调用真实模型：
 
 ```sh
-python3 tests/integration/run.py --cpa-binary /path/to/cli-proxy-api --plugin /path/to/cpa-agentrouter-continuity-v0.5.2.so
+python3 tests/integration/run.py --cpa-binary /path/to/cli-proxy-api --plugin /path/to/cpa-agentrouter-continuity-v0.6.0.so
 ```
 
 该测试在 Linux 上实际加载共享库，核对源码版本，覆盖限流/断流恢复、内容过滤终止、桌面工具往返、凭证管理、会话来源、并发名额、配置热加载和取消。`--expected-version` 可指定其他待验版本；`--previous-plugin` 可追加旧库热升级验证。测试结果与平台边界见 [验证记录](validation.md)。
@@ -34,12 +34,12 @@ python3 tests/integration/run.py --cpa-binary /path/to/cli-proxy-api --plugin /p
 ```sh
 make build
 python3 scripts/package_release.py \
-  --binary dist/linux/amd64/cpa-agentrouter-continuity-v0.5.2.so \
+  --binary dist/linux/amd64/cpa-agentrouter-continuity-v0.6.0.so \
   --output-dir dist/release
 
 python3 scripts/package_release.py \
   --platform windows-amd64 \
-  --binary dist/windows/amd64/cpa-agentrouter-continuity-v0.5.2.dll \
+  --binary dist/windows/amd64/cpa-agentrouter-continuity-v0.6.0.dll \
   --output-dir dist/release
 ```
 
