@@ -54,6 +54,7 @@ var credentialWriteMu sync.Mutex
 
 func managementRegistration() any {
 	routes := []map[string]string{}
+	routes = append(routes, map[string]string{"method": "GET", "path": apiPrefix + "/admission-diagnostics"})
 	for _, item := range [][2]string{{"GET", "/overview"}, {"GET", "/credentials"}, {"POST", "/credentials"}, {"PUT", "/credentials"}, {"POST", "/health"}, {"POST", "/models"}, {"GET", "/pricing"}} {
 		routes = append(routes, map[string]string{"method": item[0], "path": apiPrefix + item[1]})
 	}
@@ -94,6 +95,8 @@ func managementHandle(raw []byte) (any, error) {
 		return jsonResponse(404, map[string]string{"error": "接口不存在"}), nil
 	}
 	switch q.Method + " " + strings.TrimPrefix(q.Path, apiPrefix) {
+	case "GET /admission-diagnostics":
+		return jsonResponse(200, map[string]any{"version": version, "entries": admissionDiagnosticSnapshot()}), nil
 	case "GET /overview":
 		healthMu.Lock()
 		health := make(map[string]healthResult, len(healthChecks))

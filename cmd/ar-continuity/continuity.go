@@ -163,6 +163,7 @@ func lookupContinuity(scope string, body []byte) (*continuityEntry, bool) {
 
 type continuityRecorder struct {
 	scope, session string
+	requestID      string
 	seen           map[string]bool
 	required       bool
 }
@@ -180,7 +181,7 @@ func newContinuityRecorder(q execution, c credential) *continuityRecorder {
 	if r.Recovered != nil && r.Recovered.Origin.KeyHash == digest(c.APIKey) {
 		session = r.Recovered.Session
 	}
-	return &continuityRecorder{scope: r.CallerScope, session: session, seen: map[string]bool{}, required: r.Transient || r.Recovered != nil}
+	return &continuityRecorder{scope: r.CallerScope, session: session, requestID: r.ID, seen: map[string]bool{}, required: r.Transient || r.Recovered != nil}
 }
 
 func (r *continuityRecorder) remember(c credential, raw []byte) error {
@@ -228,5 +229,6 @@ func (r *continuityRecorder) remember(c credential, raw []byte) error {
 	for _, key := range keys {
 		r.seen[key] = true
 	}
+	recordAdmissionDiagnostic("output", admissionRequest{ID: r.requestID, CallerScope: r.scope, Session: r.session}, false, refs)
 	return nil
 }

@@ -156,3 +156,7 @@ python3 scripts/create_credential.py --output /secure/runtime/cpa-agentrouter-co
 5. 新管理页面可复用主面板记住的管理密钥；旧插件自身的浏览器记住记录不会自动迁移。确认模型目录、状态与出口正确后再使用。
 
 如果没有迁移会话来源，已有带历史的会话会保守绕开 AR，新建会话可按准入规则使用。迁移材料含私有密钥时必须单独安全传输，不能提交到仓库或上传 Release。
+
+## 准入诊断
+
+管理鉴权接口 `GET /v0/management/plugins/cpa-agentrouter-continuity/admission-diagnostics` 返回最近的输入准入与输出关联指纹，用于核对客户端工具往返。仅在内存保留，最多 256 条、每条最多 32 个标识哈希，超过 24 小时不返回；重载插件会清空。记录包含调用方/请求/会话哈希、匹配状态与协议标识哈希，不含正文、工具参数或明文凭证。公开资源路径不提供此接口。`output` 表示已记录的上游输出，不证明客户端已成功接收。

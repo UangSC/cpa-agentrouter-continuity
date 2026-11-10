@@ -312,6 +312,20 @@ if __name__ == '__main__':
             stored=(ROOT/'plugins/cpa-agentrouter-continuity-sessions.json.continuity').read_text()
             assert 'call_anon_' not in stored and '16:30:31' not in stored and 'mock-secret' not in stored
             print('PASS anonymous Trae',mode,'tool/result/follow-up pinned across two Keys; caller isolated; hashed storage',flush=True)
+        diagnostics=manage('/admission-diagnostics')
+        assert diagnostics['version']==expected_version
+        assert 0<len(diagnostics['entries'])<=256
+        assert any(x['stage']=='output' and any(r['kind']=='call' for r in x['references']) for x in diagnostics['entries'])
+        assert any(x['stage']=='input' and x.get('recovered') for x in diagnostics['entries'])
+        serialized=json.dumps(diagnostics)
+        assert all(secret not in serialized for secret in ['call_anon_','mock-secret','mock-client','What time is it?'])
+        try:manage('/admission-diagnostics',key='mock-client')
+        except urllib.error.HTTPError as error:assert error.code in (401,403)
+        else:raise AssertionError('admission diagnostics exposed without management authentication')
+        try:get('/v0/resource/plugins/cpa-agentrouter-continuity/admission-diagnostics')
+        except urllib.error.HTTPError as error:assert error.code==404
+        else:raise AssertionError('admission diagnostics exposed as public resource')
+        print('PASS bounded hashed admission diagnostics; management authentication enforced',flush=True)
         temporary_second.unlink();time.sleep(1)
         for scenario in ['json-error-200','json-invalid-200']:
             try:request(scenario,False)

@@ -45,6 +45,9 @@ func beforeAdmission(q sdk.RequestInterceptRequest) sdk.RequestInterceptResponse
 		r.Transient = true
 	}
 	admissionRequests.Store(q.RequestID, r)
+	if r.Transient || !r.Fresh {
+		recordAdmissionDiagnostic("input", r, hasSessionHint(q.Headers, q.Body, q.Metadata), protocolReferences(q.Body, false))
+	}
 	// Always overwrite a client-supplied admission marker; it is never trusted.
 	return sdk.RequestInterceptResponse{Headers: http.Header{admissionHeader: {q.RequestID}}}
 }
