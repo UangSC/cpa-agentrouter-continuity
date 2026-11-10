@@ -30,11 +30,10 @@ type admissionLease struct {
 	SessionRequestLimit int   `json:"session_request_limit,omitempty"`
 }
 type routingLedger struct {
-	Process     string                     `json:"process"`
-	Origins     map[string]sessionOrigin   `json:"origins"`
-	Leases      map[string]admissionLease  `json:"leases"`
-	LastKeyHash string                     `json:"last_key_hash,omitempty"`
-	References  map[string]continuityEntry `json:"references,omitempty"`
+	Process     string                    `json:"process"`
+	Origins     map[string]sessionOrigin  `json:"origins"`
+	Leases      map[string]admissionLease `json:"leases"`
+	LastKeyHash string                    `json:"last_key_hash,omitempty"`
 }
 
 var routingPath = filepath.Join("plugins", "cpa-agentrouter-continuity-sessions.json")

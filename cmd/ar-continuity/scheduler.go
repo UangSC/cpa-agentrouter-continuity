@@ -138,10 +138,6 @@ func pickAdmission(q sdk.SchedulerPickRequest) sdk.SchedulerPickResponse {
 						pinned = true
 						return nil
 					}
-					if _, known := s.Origins[r.Session]; !known && r.Recovered != nil {
-						pinned = true
-						return nil
-					}
 					if _, known := s.Origins[r.Session]; !known && !r.ParentConflict {
 						if parent, exists := s.Origins[r.ParentSession]; exists && !parent.Foreign && parent.Provider == pluginID {
 							pinned = true
@@ -171,11 +167,6 @@ func pickAdmission(q sdk.SchedulerPickRequest) sdk.SchedulerPickResponse {
 			origin = sessionOrigin{Provider: provider, AuthID: preferred, Foreign: true}
 			s.Origins[r.Session] = origin
 			known = true
-		}
-		if !known && r.Recovered != nil {
-			origin = r.Recovered.Origin
-			known = true
-			pinnedAR = true
 		}
 		inherited := false
 		parentKnown := false
@@ -255,11 +246,11 @@ func pickAdmission(q sdk.SchedulerPickRequest) sdk.SchedulerPickResponse {
 		}
 		if r.Session != "" {
 			if chosen.Provider == pluginID {
-				if !known || inherited || r.Recovered != nil || (origin.Foreign && r.ExplicitFresh) {
+				if !known || inherited || (origin.Foreign && r.ExplicitFresh) {
 					if !r.Transient {
 						s.Origins[r.Session] = sessionOrigin{Provider: pluginID, AuthID: chosen.ID, KeyHash: keyForCandidate(chosen)}
 					}
-					if !inherited && r.Recovered == nil {
+					if !inherited {
 						s.LastKeyHash = keyForCandidate(chosen)
 					}
 				} else if pinnedAR && origin.KeyHash == "" {
@@ -278,9 +269,6 @@ func pickAdmission(q sdk.SchedulerPickRequest) sdk.SchedulerPickResponse {
 		return nil
 	})
 	if e != nil {
-		if r.Recovered != nil {
-			return rejectAdmission("AR continuity state unavailable; refusing to change the verified Key.")
-		}
 		// A broken origin ledger must never allow an old conversation into AR.
 		others := []sdk.SchedulerAuthCandidate{}
 		for _, c := range q.Candidates {

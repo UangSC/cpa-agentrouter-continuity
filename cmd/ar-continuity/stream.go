@@ -12,7 +12,6 @@ import (
 )
 
 func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
-	continuity := newContinuityRecorder(q, c)
 	requests.Add(1)
 	ctx, record := beginRecord(ctx, q, c)
 	outcome, reason := "failed", "upstream_error"
@@ -137,11 +136,6 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 				}
 				d := eventData(f)
 				t := eventType(d)
-				if err := continuity.remember(c, d); err != nil {
-					terminalFailure = asRPCError(err)
-					attemptErr = err
-					break
-				}
 				// content_filter is a terminal upstream decision.  Do not forward
 				// response.incomplete: Codex treats that event as replayable and can
 				// submit the same expensive history repeatedly.  Emit one explicit
