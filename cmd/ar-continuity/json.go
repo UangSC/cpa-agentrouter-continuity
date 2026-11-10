@@ -7,6 +7,7 @@ import (
 )
 
 func runJSON(ctx context.Context, q execution, c credential, body []byte) ([]byte, error) {
+	continuity := newContinuityRecorder(q, c)
 	q.ctx = ctx
 	requests.Add(1)
 	ctx, record := beginRecord(ctx, q, c)
@@ -51,6 +52,11 @@ func runJSON(ctx context.Context, q execution, c credential, body []byte) ([]byt
 			responseErr = jsonResponseError(s.Status, raw, c.APIKey)
 		}
 		if err == nil && responseErr == nil {
+			if err := continuity.remember(c, raw); err != nil {
+				failures.Add(1)
+				reason = asRPCError(err).Code
+				return nil, err
+			}
 			if b.used > 0 {
 				recovered.Add(1)
 			}
@@ -106,6 +112,7 @@ func jsonResponseError(status int, raw []byte, secrets ...string) *rpcError {
 }
 
 func compact(q execution, c credential) (any, error) {
+	continuity := newContinuityRecorder(q, c)
 	model, e := modelForCredential(c, q.Model)
 	if e != nil {
 		return nil, e
@@ -142,6 +149,9 @@ func compact(q execution, c credential) (any, error) {
 	}
 	if q.toolNamespaceAliased {
 		raw, _ = rewriteToolNames(raw, collaborationAlias, "collaboration")
+	}
+	if err := continuity.remember(c, raw); err != nil {
+		return nil, err
 	}
 	return sdk.ExecutorResponse{Payload: raw}, nil
 }

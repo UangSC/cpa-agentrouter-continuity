@@ -16,6 +16,7 @@ type admissionRequest struct {
 	ParentConflict          bool
 	CallerScope             string
 	Transient               bool
+	Recovered               *continuityEntry
 }
 
 var admissionRequests sync.Map
@@ -25,6 +26,18 @@ func beforeAdmission(q sdk.RequestInterceptRequest) sdk.RequestInterceptResponse
 	r := admissionRequest{ID: q.RequestID, Session: session, RawSession: raw, Fresh: freshConversation(q.Body, q.Metadata), ExplicitFresh: stringMeta(q.Metadata, "history_initialization") == "new"}
 	r.ParentSession, r.ParentConflict = parentSession(q.Headers, q.Body, q.Metadata, raw)
 	r.CallerScope = stringMeta(q.Metadata, "caller_scope")
+	if !r.Fresh && r.ParentSession == "" && !r.ParentConflict && (r.Session != "" || !hasSessionHint(q.Headers, q.Body, q.Metadata)) {
+		entry, conflict := lookupContinuity(r.CallerScope, q.Body)
+		if conflict {
+			r.ParentConflict = true
+		} else if entry != nil {
+			if r.Session == "" {
+				r.Session = entry.Session
+				r.Transient = true
+			}
+			r.Recovered = entry
+		}
+	}
 	if r.Session == "" && r.Fresh && r.ParentSession == "" && !r.ParentConflict && q.RequestID != "" && !hasSessionHint(q.Headers, q.Body, q.Metadata) {
 		// A model-setup probe does not have a conversation yet. Give only this
 		// request a private reservation; never persist it as a sticky origin.

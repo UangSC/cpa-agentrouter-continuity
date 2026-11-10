@@ -14,6 +14,7 @@
 | `transport.go`、`json.go`、`sse.go`、`stream.go`、`retry.go` | HTTP 回调、JSON 错误校验、SSE 帧解析、流式交付与重试 |
 | `error_details.go`、`pricing_error.go` | 上游错误分类、历史校验与计费故障诊断 |
 | `session_identity.go`、`session_relations.go` | 显式会话身份、单轮探测判定与父子关系 |
+| `continuity.go` | 输出协议标识哈希、调用方隔离、有界关联缓存与无 ID 工具往返 |
 | `admission.go`、`scheduler.go` | 请求准入、临时探测预约、来源保护和固定 Key 选择 |
 | `routing_store.go`、`routing_metrics.go`、`execution_queue.go` | 持久化、诊断计数与 Key 请求排队 |
 | `routing_lock_*.go`、`process_identity_*.go` | 各平台文件锁与进程身份 |

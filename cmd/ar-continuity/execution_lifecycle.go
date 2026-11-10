@@ -10,7 +10,7 @@ func acquireExecution(q execution, c credential) (func(), error) {
 	session, _ := stableSession(q.Headers, q.OriginalRequest, q.Metadata)
 	if value, ok := admissionRequests.Load(q.Headers.Get(admissionHeader)); ok {
 		r := value.(admissionRequest)
-		if r.Transient && r.Fresh && freshConversation(q.OriginalRequest, q.Metadata) {
+		if r.Transient && (r.Recovered != nil || r.Fresh && freshConversation(q.OriginalRequest, q.Metadata)) {
 			session = r.Session
 		}
 	}

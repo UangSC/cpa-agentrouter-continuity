@@ -54,7 +54,10 @@ class Upstream(http.server.BaseHTTPRequestHandler):
             self.send_response(status);self.send_header('Content-Type','application/json');self.end_headers()
             self.wfile.write(json.dumps({'error':{'code':'server_error','message':PRICING_DIAGNOSTIC}}).encode());return
         terminal = None
-        if scenario.startswith(('content_filter', 'max_output_tokens')):
+        if scenario.startswith('anon-tool-first-'):
+            suffix=scenario.rsplit('-',1)[1]
+            terminal={'id':'resp_anon_'+suffix,'object':'response','status':'completed','model':data['model'],'output':[{'type':'function_call','id':'fc_anon_'+suffix,'call_id':'call_anon_'+suffix,'name':'clock','arguments':'{}'}]}
+        elif scenario.startswith(('content_filter', 'max_output_tokens')):
             reason = 'content_filter' if scenario.startswith('content_filter') else 'max_output_tokens'
             terminal = {'id':'resp_mock','object':'response','status':'incomplete','model':data['model'],
                         'incomplete_details':{'reason':reason},'output':[]}
@@ -81,7 +84,7 @@ class Upstream(http.server.BaseHTTPRequestHandler):
         def event(value):
             raw=('data: '+json.dumps(value)+'\n\n').encode()
             self.wfile.write(raw);self.wfile.flush()
-        event({'type':'response.created','response':{'id':'resp_mock','status':'in_progress'}})
+        event({'type':'response.created','response':{'id':(terminal or {}).get('id','resp_mock'),'status':'in_progress'}})
         if scenario in ('capacity_recover','capacity_exhausted','capacity_after_output') and (scenario!='capacity_recover' or attempt<=2):
             if scenario=='capacity_after_output':event({'type':'response.output_text.delta','delta':'Keep capacity output'})
             event({'type':'response.failed','response':{'status':'failed','error':{'code':'no_capacity','message':'No capacity available'}}});return
@@ -166,7 +169,7 @@ if __name__ == '__main__':
     listen=port(); auth=ROOT/'auths';auth.mkdir(exist_ok=True)
     credential={'type':'cpa-agentrouter-continuity','id':'ar-mock-only','api_key':'mock-secret','base_url':'https://agentrouter.org/v1','headers':{'User-Agent':'codex_exec/test'},'models':[{'ID':'ar-mock-model','Name':'ar-mock-model','Object':'model','OwnedBy':'cpa-agentrouter-continuity','Type':'codex','UserDefined':True}], 'max_retries':2,'model_prefix':'ar','priority':10}
     (auth/'ar-mock.json').write_text(json.dumps(credential));(auth/'ar-mock.json').chmod(0o600)
-    cfg={'config-version':8,'server':{'host':'127.0.0.1','port':listen},'access':{'api-keys':['mock-client']},'oauth':{'auth-dir':str(auth)},'requests':{'proxy-url':'http://127.0.0.1:'+str(mock.server_address[1])},'routing':{'cooldown':{'disable-cooling':True},'retry':{'request-retry':0}},'plugins':{'enabled':True,'dir':str(ROOT/'plugins'),'configs':{'cpa-agentrouter-continuity':{'enabled':True}}},'management':{'allow-remote':False,'secret-key':'mock-management','disable-control-panel':True}}
+    cfg={'config-version':8,'server':{'host':'127.0.0.1','port':listen},'access':{'api-keys':['mock-client','mock-isolated-client']},'oauth':{'auth-dir':str(auth)},'requests':{'proxy-url':'http://127.0.0.1:'+str(mock.server_address[1])},'routing':{'cooldown':{'disable-cooling':True},'retry':{'request-retry':0}},'plugins':{'enabled':True,'dir':str(ROOT/'plugins'),'configs':{'cpa-agentrouter-continuity':{'enabled':True}}},'management':{'allow-remote':False,'secret-key':'mock-management','disable-control-panel':True}}
     cfg['api-keys']={'openai-compatibility':[{'name':'mock-other','base-url':'http://127.0.0.1:'+str(other.server_port)+'/v1','keys':[{'api-key':'mock-other','proxy-url':'direct'}],'models':[{'name':'ar-mock-model'},{'name':'other-only'}]}]}
     config=ROOT/'config.yaml';config.write_text(yaml.safe_dump(cfg));config.chmod(0o600)
     log=open(ROOT/'isolated.log','w');env=dict(os.environ,SSL_CERT_FILE=str(cert),NO_PROXY='127.0.0.1,localhost',no_proxy='127.0.0.1,localhost')
@@ -280,6 +283,36 @@ if __name__ == '__main__':
                 after_origins=json.loads((ROOT/'plugins/cpa-agentrouter-continuity-sessions.json').read_text())['origins']
                 assert after_origins==before_origins,'anonymous probe retained origin state'
                 print('PASS',scenario,'no stable ID, no persisted origin',flush=True)
+        temporary_second=auth/'ar-anonymous-second.json'
+        temporary_second.write_text(json.dumps(dict(credential,id='ar-anonymous-second',api_key='mock-second')));time.sleep(1)
+        for mode in ['sse','json']:
+            def anonymous(body,scenario,key='mock-client'):
+                payload={'model':'ar/ar-mock-model','input':body,'stream':mode=='sse','metadata':{'test_scenario':scenario}}
+                req=urllib.request.Request('http://127.0.0.1:'+str(listen)+'/v1/responses',data=json.dumps(payload).encode(),headers={'Authorization':'Bearer '+key,'Content-Type':'application/json','User-Agent':'Trae/test'})
+                return op.open(req,timeout=20).read().decode()
+            first='anon-tool-first-'+mode
+            response=anonymous('What time is it?',first)
+            assert 'call_anon_'+mode in response,response
+            original_key=next(key for name,key in KEY_CAPTURE if name==first)
+            anonymous('independent probe','anon-noise-'+mode)
+            call={'type':'function_call','id':'fc_anon_'+mode,'call_id':'call_anon_'+mode,'name':'clock','arguments':'{}'}
+            history=[{'role':'user','content':'What time is it?'},call,{'type':'function_call_output','call_id':'call_anon_'+mode,'output':'16:30:31'}]
+            result='anon-tool-result-'+mode
+            response=anonymous(history,result)
+            assert 'completed' in response,response
+            assert next(key for name,key in KEY_CAPTURE if name==result)==original_key,'tool result changed Key'
+            history += [{'role':'assistant','content':'It is 16:30:31'},{'role':'user','content':'Continue'}]
+            follow='anon-follow-'+mode
+            assert 'completed' in anonymous(history,follow)
+            assert next(key for name,key in KEY_CAPTURE if name==follow)==original_key
+            try:anonymous(history,'anon-other-caller-'+mode,'mock-isolated-client')
+            except urllib.error.HTTPError as error:assert b'ar_session_ineligible' in error.read()
+            else:raise AssertionError('anonymous continuation crossed caller scope')
+            assert not COUNTS.get('anon-other-caller-'+mode)
+            stored=(ROOT/'plugins/cpa-agentrouter-continuity-sessions.json.continuity').read_text()
+            assert 'call_anon_' not in stored and '16:30:31' not in stored and 'mock-secret' not in stored
+            print('PASS anonymous Trae',mode,'tool/result/follow-up pinned across two Keys; caller isolated; hashed storage',flush=True)
+        temporary_second.unlink();time.sleep(1)
         for scenario in ['json-error-200','json-invalid-200']:
             try:request(scenario,False)
             except urllib.error.HTTPError as error:
