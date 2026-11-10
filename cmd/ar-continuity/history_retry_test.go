@@ -64,7 +64,7 @@ func TestHistoryRetriesRespectPerKeyBudgetAndEmitOnlyFinalError(t *testing.T) {
 				t.Fatalf("got %d/%d want %d", m.started, m.closed, want)
 			}
 			wire := bytes.Join(m.emitted, nil)
-			if bytes.Count(wire, []byte(`"type":"response.failed"`)) != 1 || !bytes.Contains(wire, []byte(historyErrorCode)) || !bytes.Contains(wire, []byte("history-trace")) {
+			if bytes.Count(wire, []byte(`"type":"response.failed"`)) != 1 || !bytes.Contains(wire, []byte("channel_history_verification_failed")) || !bytes.Contains(wire, []byte("history-trace")) {
 				t.Fatalf("wrong final error: %s", wire)
 			}
 			if bytes.Contains(wire, []byte("Start a new session")) {
@@ -105,7 +105,7 @@ func TestHistoryNeverReplaysAfterOutput(t *testing.T) {
 	withMock(t, m)
 	runStreaming(context.Background(), execution{StreamID: "down"}, testCredential(), []byte(`{}`))
 	wire := bytes.Join(m.emitted, nil)
-	if m.started != 1 || bytes.Count(wire, []byte("already sent")) != 1 || !bytes.Contains(wire, []byte(historyErrorCode)) {
+	if m.started != 1 || bytes.Count(wire, []byte("already sent")) != 1 || !bytes.Contains(wire, []byte("channel_history_verification_failed")) {
 		t.Fatalf("unsafe post-output replay: %s", wire)
 	}
 }

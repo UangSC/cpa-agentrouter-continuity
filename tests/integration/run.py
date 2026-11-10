@@ -268,8 +268,8 @@ if __name__ == '__main__':
             if header:headers['X-Client-Request-Id']=header
             req=urllib.request.Request('http://127.0.0.1:'+str(listen)+'/v1/responses',data=json.dumps(body).encode(),headers=headers)
             try:response=op.open(req,timeout=20).read()
-            except urllib.error.HTTPError as error:assert b'ar_session_ineligible' in error.read(),scenario
-            else:assert b'ar_session_ineligible' in response,scenario
+            except urllib.error.HTTPError as error:assert b'channel_session_ineligible' in error.read(),scenario
+            else:assert b'channel_session_ineligible' in response,scenario
             assert not COUNTS.get(scenario),'ineligible request reached upstream: '+scenario
             print('PASS '+scenario+' rejected before upstream',flush=True)
         # Model setup probes have no conversation yet. Keep them stateless.
@@ -315,9 +315,9 @@ if __name__ == '__main__':
             sent=[d for name,d in CAPTURE if name==scenario]
             assert len(sent)==attempts and all(d==sent[0] for d in sent)
             if scenario=='history_after_output':
-                assert 'ar_history_verification_failed' in response and response.count('Keep history output')==1
+                assert 'channel_history_verification_failed' in response and response.count('Keep history output')==1
             else:
-                assert all(text not in response for text in ['response.failed','ar_history_verification_failed','history-integration']),response
+                assert all(text not in response for text in ['response.failed','channel_history_verification_failed','history-integration']),response
                 assert 'response.completed' in response if stream else json.loads(response)['status']=='completed'
                 if stream:
                     events=[json.loads(line[5:]) for line in response.splitlines() if line.startswith('data:') and line[5:].strip()!='[DONE]']
@@ -356,7 +356,7 @@ if __name__ == '__main__':
                 errors=[v for v in events if v.get('type') in ('error','response.failed')]
                 assert len(errors)==1,response
                 error=errors[0].get('error') or errors[0].get('response',{}).get('error',{})
-                assert error.get('code')=='ar_content_filter',response
+                assert error.get('code')=='channel_content_filter',response
             else:
                 # CPA 8.0.34 keeps HTTP 400 and the reason but omits the JSON code field.
                 error=json.loads(response)['error']
@@ -366,7 +366,7 @@ if __name__ == '__main__':
         for stream in [True,False]:
             scenario='max_output_tokens' if stream else 'max_output_tokens_json'
             response=request(scenario,stream)
-            assert COUNTS.get(scenario)==1 and 'max_output_tokens' in response and 'ar_content_filter' not in response
+            assert COUNTS.get(scenario)==1 and 'max_output_tokens' in response and 'channel_content_filter' not in response
             assert ('response.incomplete' in response) if stream else json.loads(response)['status']=='incomplete'
             print('PASS',scenario,'normal incomplete response preserved',flush=True)
             scenario='desktop_tools_stream' if stream else 'desktop_tools_json'
@@ -400,7 +400,7 @@ if __name__ == '__main__':
                 failures=[v for v in events if v.get('type') in ('error','response.failed')]
                 assert len(failures)==1,(scenario,response)
                 detail=failures[0].get('error') or failures[0].get('response',{}).get('error',{})
-                assert detail['code']=='ar_upstream_pricing_error' and detail['http_status']==400
+                assert detail['code']=='channel_upstream_pricing_error' and detail['http_status']==400
             else:assert json.loads(response)['error']['type']=='invalid_request_error'
             if scenario=='pricing_sse_after':assert response.count('Keep this output')==1
             print('PASS',scenario,'attempts=1 pricing diagnostic preserved',flush=True)
@@ -604,7 +604,7 @@ if __name__ == '__main__':
         baseline=ar_attempts();other_baseline=sum(OTHER_COUNTS.values())
         for model in ['ar-mock-model','other-only']:
             try:mixed('balanced-0','pinned-key-unavailable-'+model,model,history=True)
-            except urllib.error.HTTPError as error:assert b'ar_session_ineligible' in error.read()
+            except urllib.error.HTTPError as error:assert b'channel_session_ineligible' in error.read()
             else:raise AssertionError('bound conversation switched Key or provider')
         assert ar_attempts()==baseline and sum(OTHER_COUNTS.values())==other_baseline
         pinned_path.write_text(json.dumps(pinned));time.sleep(1)
@@ -621,7 +621,7 @@ if __name__ == '__main__':
         assert next(key for name,key in KEY_CAPTURE if name=='child-existing-wins')==sequence[1]
         pinned_path.write_text(json.dumps(dict(pinned,disabled=True)));time.sleep(1)
         try:child_request('child-0','balanced-0','child-pinned-unavailable')
-        except urllib.error.HTTPError as error:assert b'ar_session_ineligible' in error.read()
+        except urllib.error.HTTPError as error:assert b'channel_session_ineligible' in error.read()
         else:raise AssertionError('child switched Key')
         assert not COUNTS.get('child-pinned-unavailable')
         pinned_path.write_text(json.dumps(pinned));time.sleep(1)

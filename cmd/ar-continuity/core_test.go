@@ -239,7 +239,7 @@ func TestHistoryFailureRetriesOriginalRequestWithinLimit(t *testing.T) {
 	if m.started != 3 || !bytes.Equal(m.bodies[0], m.bodies[1]) || !bytes.Equal(m.bodies[0], m.bodies[2]) || !bytes.Contains(m.bodies[0], []byte("rs_1")) {
 		t.Fatal("history changed or replayed")
 	}
-	if !bytes.Contains(bytes.Join(m.emitted, nil), []byte(historyErrorCode)) {
+	if !bytes.Contains(bytes.Join(m.emitted, nil), []byte("channel_history_verification_failed")) {
 		t.Fatal("missing history verification hint")
 	}
 }
@@ -256,7 +256,7 @@ func TestContentFilterFailsFastWithoutReplay(t *testing.T) {
 		t.Fatalf("content_filter was replayed: %d attempts", m.started)
 	}
 	wire := string(bytes.Join(m.emitted, nil))
-	if !strings.Contains(wire, "ar_content_filter") || !strings.Contains(wire, "content_filter") {
+	if !strings.Contains(wire, "channel_content_filter") || !strings.Contains(wire, "content_filter") {
 		t.Fatalf("missing explicit content filter failure: %s", wire)
 	}
 	if strings.Contains(wire, `"type":"response.incomplete"`) {
@@ -272,7 +272,7 @@ func TestContentFilterBeforeOutputFailsWithoutReplay(t *testing.T) {
 	withMock(t, m)
 	runStreaming(context.Background(), execution{StreamID: "down"}, testCredential(), []byte(`{}`))
 	wire := bytes.Join(m.emitted, nil)
-	if m.started != 1 || m.closed != 1 || bytes.Count(wire, []byte(`"type":"response.failed"`)) != 1 || !bytes.Contains(wire, []byte("ar_content_filter")) {
+	if m.started != 1 || m.closed != 1 || bytes.Count(wire, []byte(`"type":"response.failed"`)) != 1 || !bytes.Contains(wire, []byte("channel_content_filter")) {
 		t.Fatalf("expected one terminal failure and no replay: attempts=%d closed=%d wire=%s", m.started, m.closed, wire)
 	}
 	if bytes.Contains(wire, []byte("response.incomplete")) {
@@ -319,7 +319,7 @@ func TestNeverReplayAfterToolOrText(t *testing.T) {
 			if m.started != 1 {
 				t.Fatal("replayed")
 			}
-			if !bytes.Contains(bytes.Join(m.emitted, nil), []byte("ar_stream_interrupted")) {
+			if !bytes.Contains(bytes.Join(m.emitted, nil), []byte("channel_stream_interrupted")) {
 				t.Fatal("missing failure")
 			}
 		})

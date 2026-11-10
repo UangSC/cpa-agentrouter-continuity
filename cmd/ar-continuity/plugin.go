@@ -10,7 +10,7 @@ import (
 
 const pluginID = "cpa-agentrouter-continuity"
 
-const version = "0.6.0"
+const version = "0.6.1"
 
 const maxBuffer = 8 << 20
 
@@ -26,14 +26,14 @@ type rpcError struct {
 	HTTPStatus int    `json:"http_status,omitempty"`
 }
 
-func (e *rpcError) Error() string { return e.Message }
+func (e *rpcError) Error() string { return channelErrorMessage(e.Message) }
 
 func asRPCError(err error) *rpcError {
 	var e *rpcError
 	if errors.As(err, &e) {
 		return e
 	}
-	return &rpcError{"ar_upstream_error", "AgentRouter request failed", 502}
+	return &rpcError{"ar_upstream_error", "渠道请求失败", 502}
 }
 
 type execution struct {
@@ -125,7 +125,7 @@ func handle(method string, raw []byte) (any, error) {
 	case "executor.execute", "executor.execute_stream":
 		return executeRequest(method, raw)
 	case "executor.count_tokens", "executor.http_request", "auth.login_start", "auth.login_poll":
-		return nil, &rpcError{"ar_unsupported_operation", "Operation not implemented by AR continuity", 400}
+		return nil, &rpcError{"ar_unsupported_operation", "渠道尚不支持此操作", 400}
 	case "management.register":
 		return managementRegistration(), nil
 	case "management.handle":

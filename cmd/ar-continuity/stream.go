@@ -60,7 +60,10 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 		}
 		failures.Add(1)
 		reason = e.Code
-		v := map[string]any{"type": "response.failed", "response": map[string]any{"status": "failed", "error": map[string]any{"code": e.Code, "message": strings.ReplaceAll(e.Message, c.APIKey, "[REDACTED]"), "type": errorType(e.HTTPStatus), "http_status": e.HTTPStatus}}}
+		presented := *e
+		presented.Message = strings.ReplaceAll(presented.Message, c.APIKey, "[REDACTED]")
+		presented = publicRPCError(&presented)
+		v := map[string]any{"type": "response.failed", "response": map[string]any{"status": "failed", "error": map[string]any{"code": presented.Code, "message": presented.Message, "type": errorType(e.HTTPStatus), "http_status": e.HTTPStatus}}}
 		d, _ := json.Marshal(v)
 		_ = emit(append(append([]byte("event: response.failed\ndata: "), d...), []byte("\n\n")...))
 	}
@@ -235,7 +238,7 @@ func runStreaming(ctx context.Context, q execution, c credential, body []byte) {
 			return
 		}
 		if committed {
-			terminal(&rpcError{"ar_stream_interrupted", "AgentRouter stream interrupted after output; automatic replay suppressed to avoid duplicate tool actions", 502})
+			terminal(&rpcError{"ar_stream_interrupted", "渠道输出后连接中断；为避免重复执行工具，未自动重放请求。", 502})
 			return
 		}
 		if len(failure) == 0 && attemptErr != nil {

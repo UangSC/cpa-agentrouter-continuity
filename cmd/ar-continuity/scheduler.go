@@ -118,7 +118,7 @@ func chooseAdmission(s *routingLedger, candidates []sdk.SchedulerAuthCandidate) 
 }
 
 func rejectAdmission(reason string) sdk.SchedulerPickResponse {
-	return sdk.SchedulerPickResponse{Handled: true, Reject: true, RejectCode: "ar_session_ineligible", RejectReason: reason}
+	return sdk.SchedulerPickResponse{Handled: true, Reject: true, RejectCode: "channel_session_ineligible", RejectReason: channelErrorMessage(reason)}
 }
 func pickAdmission(q sdk.SchedulerPickRequest) sdk.SchedulerPickResponse {
 	r, ok := schedulerAdmission(q)
@@ -153,13 +153,13 @@ func pickAdmission(q sdk.SchedulerPickRequest) sdk.SchedulerPickResponse {
 			}
 		}
 		if pinned {
-			return rejectAdmission("The AR Key bound to this conversation is not available for this model. This conversation cannot switch Keys or providers.")
+			return rejectAdmission("当前会话绑定的渠道凭证不支持此模型；该会话不能切换凭证或渠道。")
 		}
 		return sdk.SchedulerPickResponse{}
 	}
 	id := http.Header(q.Options.Headers).Get(admissionHeader)
 	preferred, provider := affinityCandidate(q, r)
-	result := rejectAdmission("AR 无法确认此请求的会话来源；带历史的请求需要稳定会话标识或可验证的父会话。")
+	result := rejectAdmission("渠道无法确认此请求的会话来源；带历史的请求需要稳定会话标识或可验证的父会话。")
 	e := withRoutingLedger(func(s *routingLedger) error {
 		origin, known := s.Origins[r.Session]
 		pinnedAR := known && !origin.Foreign && origin.Provider == pluginID
@@ -191,7 +191,7 @@ func pickAdmission(q sdk.SchedulerPickRequest) sdk.SchedulerPickResponse {
 						}
 					}
 					if !found {
-						result = rejectAdmission("The child's existing AR Key is unavailable; refusing to replace it with the parent's Key.")
+						result = rejectAdmission("子会话原有渠道凭证暂不可用，不能改用父会话的凭证。")
 						return nil
 					}
 				}
@@ -225,7 +225,7 @@ func pickAdmission(q sdk.SchedulerPickRequest) sdk.SchedulerPickResponse {
 		}
 		if len(allowed) == 0 {
 			if pinnedAR {
-				result = rejectAdmission("The AR Key bound to this conversation is unavailable. Retry later; this conversation cannot switch Keys or providers.")
+				result = rejectAdmission("当前会话绑定的渠道凭证暂不可用，请稍后重试；该会话不能切换凭证或渠道。")
 			}
 			return nil
 		}
@@ -279,7 +279,7 @@ func pickAdmission(q sdk.SchedulerPickRequest) sdk.SchedulerPickResponse {
 		if len(others) > 0 {
 			return sdk.SchedulerPickResponse{Handled: true, AuthID: chooseWeighted(others).ID}
 		}
-		return rejectAdmission("AR session admission state unavailable")
+		return rejectAdmission("渠道会话准入状态暂不可用，请稍后重试。")
 	}
 	return result
 }

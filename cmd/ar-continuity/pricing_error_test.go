@@ -195,7 +195,7 @@ func TestPricingHTTPAndStreamingNeverReplay(t *testing.T) {
 func assertPricingWire(t *testing.T, emitted [][]byte) {
 	t.Helper()
 	wire := bytes.Join(emitted, nil)
-	if bytes.Count(wire, []byte(`"type":"response.failed"`)) != 1 || !bytes.Contains(wire, []byte(pricingErrorCode)) || !bytes.Contains(wire, []byte("trace-pricing-test")) || !bytes.Contains(wire, []byte("cc12h")) {
+	if bytes.Count(wire, []byte(`"type":"response.failed"`)) != 1 || !bytes.Contains(wire, []byte("channel_upstream_pricing_error")) || !bytes.Contains(wire, []byte("trace-pricing-test")) || !bytes.Contains(wire, []byte("cc12h")) {
 		t.Fatalf("unexpected terminal response: %s", wire)
 	}
 }

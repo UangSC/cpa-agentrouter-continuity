@@ -63,15 +63,15 @@ func configuredHeaders(c credential) http.Header {
 func validateCredential(c credential) error {
 	u, err := url.Parse(c.BaseURL)
 	if err != nil || u.Scheme != "https" || u.Host != "agentrouter.org" || strings.TrimRight(u.Path, "/") != "/v1" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
-		return &rpcError{"ar_scope_violation", "Only https://agentrouter.org/v1 is permitted", 400}
+		return &rpcError{"ar_scope_violation", "渠道接口地址不在允许范围内", 400}
 	}
 	if c.Type != pluginID || strings.TrimSpace(c.APIKey) == "" {
-		return &rpcError{"ar_credential_invalid", "A runtime AR API key is required; no key is bundled", 401}
+		return &rpcError{"ar_credential_invalid", "缺少渠道 API Key，请联系管理员检查凭证配置", 401}
 	}
 	h := configuredHeaders(c)
 	ua := strings.ToLower(h.Get("User-Agent"))
 	if !strings.Contains(ua, "codex") && !strings.Contains(ua, "zcode") {
-		return &rpcError{"ar_user_agent_required", "AR requires a configured Codex or Zcode User-Agent", 400}
+		return &rpcError{"ar_user_agent_required", "渠道客户端标识配置不完整，请联系管理员检查 User-Agent 请求头", 400}
 	}
 	if c.MaxRetries != nil && (*c.MaxRetries < 0 || *c.MaxRetries > 10) {
 		return fmt.Errorf("max_retries must be between 0 and 10")
@@ -108,7 +108,7 @@ func modelForCredential(c credential, requested string) (string, error) {
 			return m.ID, nil
 		}
 	}
-	return "", &rpcError{"model_not_found", "Model is not declared by this AR credential", 404}
+	return "", &rpcError{"model_not_found", "当前渠道凭证未配置该模型", 404}
 }
 
 func publicModelID(c credential, id string) string {

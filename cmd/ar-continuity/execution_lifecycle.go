@@ -39,7 +39,7 @@ func acquireExecution(q execution, c credential) (func(), error) {
 		return fmt.Errorf("no AR session reservation")
 	})
 	if e != nil {
-		return nil, &rpcError{"ar_session_ineligible", "This conversation is not admitted to AR. Start a new conversation or use its original provider.", 409}
+		return nil, &rpcError{"ar_session_ineligible", "当前会话不符合渠道准入条件，请新建会话或继续使用原渠道。", 409}
 	}
 	var once sync.Once
 	return func() {

@@ -123,7 +123,7 @@ func safeErrorWithCause(status int, raw []byte, cause error, secrets ...string) 
 		}
 		return value
 	}
-	prefix := fmt.Sprintf("AgentRouter 上游请求失败（HTTP %d）。", status)
+	prefix := fmt.Sprintf("渠道上游请求失败（HTTP %d）。", status)
 	if history {
 		prefix = "上游暂时无法校验本会话的加密历史。原历史已保留；可稍后再试，持续失败再考虑新建会话。"
 	}

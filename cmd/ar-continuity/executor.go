@@ -13,17 +13,17 @@ func executeRequest(method string, raw []byte) (any, error) {
 		return nil, err
 	}
 	if q.AuthProvider != pluginID {
-		return nil, &rpcError{"ar_scope_violation", "Credential is not owned by AR plugin", 400}
+		return nil, &rpcError{"ar_scope_violation", "当前凭证不属于此渠道", 400}
 	}
 	c, e := decodeCredential(q.StorageJSON)
 	if e != nil {
 		return nil, e
 	}
 	if c.Disabled {
-		return nil, &rpcError{"ar_disabled", "AR credential disabled", 403}
+		return nil, &rpcError{"ar_disabled", "渠道凭证已停用", 403}
 	}
 	if q.Alt != "" && q.Alt != "responses/compact" {
-		return nil, &rpcError{"ar_unsupported_route", "Unsupported AR operation", 400}
+		return nil, &rpcError{"ar_unsupported_route", "渠道不支持此操作", 400}
 	}
 	if q.StreamID == "" && method == "executor.execute_stream" {
 		return nil, fmt.Errorf("stream ID missing")
@@ -68,7 +68,7 @@ func executeRequest(method string, raw []byte) (any, error) {
 			defer finish()
 			defer func() {
 				if recover() != nil {
-					_ = hostCall("host.stream.close", map[string]string{"stream_id": q.StreamID, "error": "AR plugin internal failure"}, nil)
+					_ = hostCall("host.stream.close", map[string]string{"stream_id": q.StreamID, "error": "渠道处理发生内部错误"}, nil)
 				}
 			}()
 			runStreaming(ctx, q, c, body)

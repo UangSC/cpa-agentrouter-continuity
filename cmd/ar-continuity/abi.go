@@ -83,7 +83,7 @@ func cliproxyPluginCall(method *C.char, request *C.uint8_t, size C.size_t, respo
 	response.len = 0
 	defer func() {
 		if recover() != nil {
-			raw, _ := json.Marshal(envelope{Error: &rpcError{Code: "plugin_panic", Message: "AR plugin internal error", HTTPStatus: 500}})
+			raw, _ := json.Marshal(envelope{Error: &rpcError{Code: "plugin_panic", Message: "渠道处理发生内部错误", HTTPStatus: 500}})
 			response.ptr = C.CBytes(raw)
 			response.len = C.size_t(len(raw))
 			rc = 0

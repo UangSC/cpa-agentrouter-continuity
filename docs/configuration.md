@@ -27,6 +27,8 @@
 
 ## 管理页面
 
+客户端错误使用 `channel_` 前缀，例如 `channel_session_ineligible`、`channel_upstream_timeout`。错误后缀、HTTP 状态和追踪编号用于排查；管理监控中的内部错误码保留原有前缀，两者后缀对应。具体重试和调度判断仍基于内部错误分类。
+
 从 CPA 的插件菜单打开 **AR Continuity**：
 
 1. 输入 CPA **管理密钥**，点击「连接」或按回车。

@@ -75,7 +75,7 @@ func aliasRequestTools(raw []byte) ([]byte, bool, error) {
 	_, collision := rewriteToolNames(raw, collaborationAlias, "collision_check")
 	out, changed := rewriteToolNames(raw, "collaboration", collaborationAlias)
 	if collision && changed {
-		return nil, false, &rpcError{"ar_tool_alias_conflict", "Tool namespace conflicts with AR compatibility alias", 400}
+		return nil, false, &rpcError{"ar_tool_alias_conflict", "工具命名空间与渠道兼容映射冲突", 400}
 	}
 	return out, changed, nil
 }
